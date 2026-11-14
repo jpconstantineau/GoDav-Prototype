@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/winpath"
 
 	"go.yaml.in/yaml/v3"
@@ -87,7 +88,7 @@ func Load(filename string) (Settings, error) {
 		return result, errSettings
 	}
 	maxBytes, ok := positiveInt(limits["max_file_bytes"])
-	if !ok {
+	if !ok || maxBytes > files.AbsoluteMaxFileBytes {
 		return result, errSettings
 	}
 	for _, node := range []*yaml.Node{root["listen_address"], root["public_origin"], root["dav_prefix"], root["database_path"], tls["cert_file"], tls["key_file"], auth["method"]} {

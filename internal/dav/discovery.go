@@ -13,12 +13,26 @@ import (
 )
 
 // discovery reuses upstream PROPFIND over a read-only committed snapshot.
-func discovery(collections *files.Service) http.Handler {
+func discovery(collections *files.Service, maxBytes int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Allow", "OPTIONS, PROPFIND, MKCOL")
+		w.Header().Set("Allow", "OPTIONS, PROPFIND, MKCOL, GET, HEAD, PUT")
 		path := strings.TrimPrefix(r.URL.Path, "/dav")
 		path = strings.TrimPrefix(path, "/")
+		if r.Method == "PUT" || r.Method == "MKCOL" {
+			for _, name := range []string{"If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "If-Range", "If", "Lock-Token"} {
+				if _, present := r.Header[name]; present {
+					http.Error(w, "Conditional writes not implemented", 501)
+					return
+				}
+			}
+		}
 		switch r.Method {
+		case "PUT":
+			putFile(w, r, collections, path, maxBytes)
+			return
+		case "GET", "HEAD":
+			readFile(w, r, collections, path)
+			return
 		case "MKCOL":
 			makeCollection(w, r, collections, path)
 			return

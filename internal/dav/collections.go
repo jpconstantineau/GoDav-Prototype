@@ -28,6 +28,14 @@ func namespaceError(w http.ResponseWriter, r *http.Request, err error) {
 		status = 405
 	case errors.Is(err, files.ErrCapacity):
 		status = 507
+	case errors.Is(err, files.ErrTooLarge):
+		status = 413
+	case errors.Is(err, files.ErrInput):
+		status = 400
+	case errors.Is(err, files.ErrBusy):
+		status = 503
+	case errors.Is(err, files.ErrTimeout):
+		status = 408
 	}
 	http.Error(w, http.StatusText(status), status)
 }
@@ -101,12 +109,19 @@ func (snapshotFS) Rename(context.Context, string, string) error     { return os.
 
 type collectionInfo struct{ node files.Node }
 
-func (i collectionInfo) Name() string       { return i.node.Name }
-func (collectionInfo) Size() int64          { return 0 }
-func (collectionInfo) Mode() os.FileMode    { return os.ModeDir | 0555 }
-func (i collectionInfo) ModTime() time.Time { return i.node.Modified }
-func (collectionInfo) IsDir() bool          { return true }
-func (collectionInfo) Sys() any             { return nil }
+func (i collectionInfo) Name() string { return i.node.Name }
+func (i collectionInfo) Size() int64  { return i.node.Size }
+func (i collectionInfo) Mode() os.FileMode {
+	if i.node.File {
+		return 0444
+	}
+	return os.ModeDir | 0555
+}
+func (i collectionInfo) ModTime() time.Time                          { return i.node.Modified }
+func (i collectionInfo) IsDir() bool                                 { return !i.node.File }
+func (collectionInfo) Sys() any                                      { return nil }
+func (i collectionInfo) ContentType(context.Context) (string, error) { return i.node.ContentType, nil }
+func (i collectionInfo) ETag(context.Context) (string, error)        { return i.node.ETag, nil }
 
 type collectionFile struct {
 	info     collectionInfo

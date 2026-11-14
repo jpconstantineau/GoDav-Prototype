@@ -17,12 +17,12 @@ type AccountLookup interface {
 	LookupEnabled(context.Context, string) (auth.Account, bool, error)
 }
 
-func Handler(accounts AccountLookup, collections *files.Service, origin string) http.Handler {
+func Handler(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64) http.Handler {
 	u, _ := url.Parse(origin)
 	expected, _ := parseAuthority(u.Host)
 	slots := make(chan struct{}, 4)
 	mux := http.NewServeMux()
-	root := discovery(collections)
+	root := discovery(collections, maxBytes)
 	mux.Handle("/dav", root)
 	mux.Handle("/dav/", root)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

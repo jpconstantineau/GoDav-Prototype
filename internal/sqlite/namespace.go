@@ -31,7 +31,15 @@ func (s *AccountStore) PrepareNamespace(ctx context.Context) error {
 	if s.conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version) != nil {
 		return files.ErrUnavailable
 	}
-	if version == 2 {
+	// Preflight the next migration's reserved object before committing any
+	// namespace change. Never adopt a coincidentally named older-state table.
+	if version == 1 || version == 2 {
+		var conflicting int
+		if s.conn.QueryRowContext(ctx, `SELECT count(*) FROM main.sqlite_schema WHERE name='file_contents' COLLATE NOCASE`).Scan(&conflicting) != nil || conflicting != 0 {
+			return files.ErrUnavailable
+		}
+	}
+	if version == 2 || version == 3 {
 		return nil
 	}
 	if version != 1 {
@@ -87,6 +95,12 @@ func lookupCollection(ctx context.Context, q namespaceQuery, names []string) (fi
 	}
 	canonical := make([]string, 0, len(names))
 	for _, name := range names {
+		if fileMetadata(ctx, q, &node) != nil {
+			return files.Node{}, "", files.ErrUnavailable
+		}
+		if node.File {
+			return files.Node{}, "", files.ErrMissing
+		}
 		err := q.QueryRowContext(ctx, `SELECT id,name,created_at,modified_at FROM nodes WHERE parent_id=? AND name_key=?`, node.ID, files.Key(name)).Scan(&node.ID, &node.Name, &created, &modified)
 		if errors.Is(err, sql.ErrNoRows) {
 			return files.Node{}, "", files.ErrMissing
@@ -95,6 +109,9 @@ func lookupCollection(ctx context.Context, q namespaceQuery, names []string) (fi
 			return files.Node{}, "", files.ErrUnavailable
 		}
 		canonical = append(canonical, node.Name)
+	}
+	if fileMetadata(ctx, q, &node) != nil {
+		return files.Node{}, "", files.ErrUnavailable
 	}
 	node.Created, node.Modified = time.Unix(created, 0).UTC(), time.Unix(modified, 0).UTC()
 	return node, strings.Join(canonical, "/"), nil
@@ -117,7 +134,7 @@ func (s *AccountStore) CreateCollection(ctx context.Context, names []string) err
 	}
 	defer tx.Rollback()
 	parent, parentPath, err := lookupCollection(ctx, tx, names[:len(names)-1])
-	if errors.Is(err, files.ErrMissing) {
+	if errors.Is(err, files.ErrMissing) || parent.File {
 		return files.ErrParentMissing
 	}
 	if err != nil {
@@ -174,10 +191,10 @@ func (s *AccountStore) CollectionSnapshot(ctx context.Context, names []string, c
 		return snapshot, err
 	}
 	snapshot.Node, snapshot.Path = node, path
-	if !children {
+	if !children || node.File {
 		return snapshot, nil
 	}
-	rows, err := s.conn.QueryContext(ctx, `SELECT id,name,created_at,modified_at FROM nodes WHERE parent_id=? ORDER BY name_key LIMIT ?`, node.ID, files.MaxChildren+1)
+	rows, err := s.conn.QueryContext(ctx, `SELECT n.id,n.name,n.created_at,n.modified_at,f.node_id IS NOT NULL,coalesce(f.size,0),coalesce(f.content_type,''),coalesce(f.etag,'') FROM nodes n LEFT JOIN file_contents f ON f.node_id=n.id WHERE n.parent_id=? ORDER BY n.name_key LIMIT ?`, node.ID, files.MaxChildren+1)
 	if err != nil {
 		return files.Snapshot{}, files.ErrUnavailable
 	}
@@ -185,7 +202,7 @@ func (s *AccountStore) CollectionSnapshot(ctx context.Context, names []string, c
 	for rows.Next() {
 		var n files.Node
 		var created, modified int64
-		if rows.Scan(&n.ID, &n.Name, &created, &modified) != nil || len(snapshot.Children) >= files.MaxChildren {
+		if rows.Scan(&n.ID, &n.Name, &created, &modified, &n.File, &n.Size, &n.ContentType, &n.ETag) != nil || len(snapshot.Children) >= files.MaxChildren {
 			return files.Snapshot{}, files.ErrUnavailable
 		}
 		n.Created, n.Modified = time.Unix(created, 0).UTC(), time.Unix(modified, 0).UTC()

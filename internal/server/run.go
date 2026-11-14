@@ -88,12 +88,15 @@ func Run(ctx context.Context, configPath string, identity Identity, output io.Wr
 	if err := state.Accounts().PrepareNamespace(ctx); err != nil {
 		return errors.New("namespace preparation failed")
 	}
+	if err := state.Accounts().PrepareFiles(ctx); err != nil {
+		return errors.New("file preparation failed")
+	}
 	users := &requestUsers{}
 	requestCtx, cancelRequests := context.WithCancel(ctx)
 	protocols := &http.Protocols{}
 	protocols.SetHTTP1(true)
 	srv := &http.Server{
-		Handler:                      dav.Trace(logger, users.guard(dav.Handler(state.Accounts(), files.New(state.Accounts()), settings.PublicOrigin))),
+		Handler:                      dav.Trace(logger, users.guard(dav.Handler(state.Accounts(), files.New(state.Accounts()), settings.PublicOrigin, settings.MaxFileBytes))),
 		Protocols:                    protocols,
 		BaseContext:                  func(net.Listener) context.Context { return requestCtx },
 		DisableGeneralOptionsHandler: true,

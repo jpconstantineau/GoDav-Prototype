@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -31,6 +32,9 @@ var (
 type Node struct {
 	ID, Name          string
 	Created, Modified time.Time
+	File              bool
+	Size              int64
+	ContentType, ETag string
 }
 
 // Snapshot contains one committed listing, with preserved ancestor spelling.
@@ -44,9 +48,15 @@ type Snapshot struct {
 type Repository interface {
 	CreateCollection(context.Context, []string) error
 	CollectionSnapshot(context.Context, []string, bool) (Snapshot, error)
+	PutFile(context.Context, []string, []byte, string) (Node, bool, error)
+	ReadFile(context.Context, []string) (Snapshot, []byte, error)
 }
 
-type Service struct{ store Repository }
+type Service struct {
+	store        Repository
+	payloadMu    sync.Mutex
+	payloadBytes int64
+}
 
 func New(store Repository) *Service { return &Service{store: store} }
 
@@ -66,7 +76,11 @@ func (s *Service) Snapshot(ctx context.Context, path string, children bool) (Sna
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return s.store.CollectionSnapshot(ctx, names, children)
+	snapshot, err := s.store.CollectionSnapshot(ctx, names, children)
+	if err == nil && snapshot.Node.File && strings.HasSuffix(path, "/") {
+		return Snapshot{}, ErrInvalid
+	}
+	return snapshot, err
 }
 
 // Components accepts an already decoded relative path. It never cleans or

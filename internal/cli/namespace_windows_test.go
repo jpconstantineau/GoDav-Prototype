@@ -235,7 +235,7 @@ func TestNamespaceRefusesMalformedStateWithoutRepair(t *testing.T) {
 		`UPDATE namespace_policy SET unicode_version='future'`,
 		`DELETE FROM namespace_policy`,
 		`PRAGMA ignore_check_constraints=ON; UPDATE nodes SET name='wrong' WHERE id='root'`,
-		`PRAGMA user_version=3`,
+		`PRAGMA user_version=4`,
 	} {
 		f := newServerFixture(t, bin)
 		p := startServer(t, bin, f)
@@ -447,7 +447,12 @@ func assertNamespaceSchemaRefused(t *testing.T, bin, statement string) {
 	if err != nil {
 		t.Fatal("fixture open failed")
 	}
-	_, err = db.Exec(statement)
+	// Keep these earlier namespace-constraint fixtures independently v2. A
+	// rename must not accidentally fail only because v3's content FK changed.
+	_, err = db.Exec(`DROP TABLE file_contents; PRAGMA user_version=2;`)
+	if err == nil {
+		_, err = db.Exec(statement)
+	}
 	closeErr := db.Close()
 	if err != nil || closeErr != nil {
 		t.Fatal("fixture mutation failed")
@@ -565,7 +570,7 @@ func TestNamespaceBoundsDepthAndPreservesDiscovery(t *testing.T) {
 	namespaceStatus(t, client, f, "MKCOL", path+"d/", nil, 400)
 	response := davRequest(t, client, f, "OPTIONS", path, true)
 	response.Body.Close()
-	if response.StatusCode != 200 || response.Header.Get("Allow") != "OPTIONS, PROPFIND, MKCOL" || response.Header.Get("DAV") != "" {
+	if response.StatusCode != 200 || response.Header.Get("Allow") != "OPTIONS, PROPFIND, MKCOL, GET, HEAD, PUT" || response.Header.Get("DAV") != "" {
 		t.Fatal("collection capability advertisement is false")
 	}
 	for _, method := range []string{"PUT", "DELETE", "MOVE", "LOCK", "UNLOCK", "PROPPATCH", "COPY"} {

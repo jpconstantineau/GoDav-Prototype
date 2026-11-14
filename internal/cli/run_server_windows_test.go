@@ -220,7 +220,7 @@ func TestRunServerAuthenticatesStoredAccount(t *testing.T) {
 			if response.StatusCode != tc.status {
 				t.Fatalf("unexpected auth status %d", response.StatusCode)
 			}
-			if tc.status == 200 && (response.Header.Get("Allow") != "OPTIONS, PROPFIND, MKCOL" || response.Header.Get("DAV") != "") {
+			if tc.status == 200 && (response.Header.Get("Allow") != "OPTIONS, PROPFIND, MKCOL, GET, HEAD, PUT" || response.Header.Get("DAV") != "") {
 				t.Fatal("partial discovery advertises unsupported capability")
 			}
 			if tc.status == 401 && response.Header.Get("WWW-Authenticate") != `Basic realm="GoDav"` {
