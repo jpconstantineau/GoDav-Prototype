@@ -22,6 +22,10 @@ func build() error {
 	if len(os.Args) != 2 {
 		return fmt.Errorf("usage: go run ./tools/build-release <new-output-directory>")
 	}
+	notices, err := os.ReadFile("THIRD_PARTY_NOTICES.txt")
+	if err != nil || len(notices) == 0 {
+		return fmt.Errorf("required dependency notices unavailable")
+	}
 	revision, err := exec.Command("git", "rev-parse", "--verify", "HEAD").Output()
 	if err != nil {
 		return fmt.Errorf("required Git revision unavailable: %w", err)
@@ -60,6 +64,9 @@ func build() error {
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("%s build: %w", target.os, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "THIRD_PARTY_NOTICES.txt"), notices, 0644); err != nil {
+			return fmt.Errorf("write required dependency notices: %w", err)
 		}
 	}
 	return nil

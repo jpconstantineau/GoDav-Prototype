@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const help = "Usage: godav <command>\n\nCommands:\n  version  Show build identity\n  help     Show this help\n"
+const help = "Usage: godav <command>\n\nCommands:\n  init config [--config <path>] --username <name>  Initialize privately (default: godav.yaml)\n  version  Show build identity\n  help     Show this help\n"
 
 func TestHelpDoesNotBootstrap(t *testing.T) {
 	bin := development(t)

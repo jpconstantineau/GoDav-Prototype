@@ -14,7 +14,7 @@ func sourceFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	src := root(t)
-	for _, name := range []string{"go.mod", "cmd", "internal", "tools"} {
+	for _, name := range []string{"go.mod", "go.sum", "THIRD_PARTY_NOTICES.txt", "cmd", "internal", "tools"} {
 		base := filepath.Join(src, name)
 		if _, e := os.Stat(base); os.IsNotExist(e) {
 			continue
@@ -100,6 +100,32 @@ func TestReleaseIdentity(t *testing.T) {
 	}
 	if settings["GOOS"] != "linux" || settings["GOARCH"] != "amd64" || settings["CGO_ENABLED"] != "0" {
 		t.Fatalf("cross-build target: %v", settings)
+	}
+	if settings["-tags"] != "" {
+		t.Fatal("release unexpectedly includes build tags")
+	}
+	for _, target := range []string{"windows-amd64/godav.exe", "linux-amd64/godav"} {
+		build, err := buildinfo.ReadFile(filepath.Join(output, filepath.FromSlash(target)))
+		if err != nil {
+			t.Fatal("release build information missing")
+		}
+		for _, setting := range build.Settings {
+			if setting.Key == "-tags" && setting.Value != "" {
+				t.Fatal("release contains unexpected build tags")
+			}
+		}
+		artifact, err := os.ReadFile(filepath.Join(output, filepath.FromSlash(target)))
+		if err != nil {
+			t.Fatal("release artifact missing")
+		}
+		if strings.Contains(string(artifact), "test-only settings I/O failure") || strings.Contains(string(artifact), "test-only private console I/O failure") {
+			t.Fatal("release contains test-only fault controls")
+		}
+		notices, err := os.ReadFile(filepath.Join(output, filepath.Dir(filepath.FromSlash(target)), "THIRD_PARTY_NOTICES.txt"))
+		original, originalErr := os.ReadFile(filepath.Join(root(t), "THIRD_PARTY_NOTICES.txt"))
+		if err != nil || originalErr != nil || len(notices) == 0 || string(notices) != string(original) {
+			t.Fatal("release lacks its exact companion dependency notices")
+		}
 	}
 	for _, value := range []string{".revision=" + revision, ".buildTime=" + stamp, ".sourceState=clean"} {
 		if !strings.Contains(settings["-ldflags"], value) {
