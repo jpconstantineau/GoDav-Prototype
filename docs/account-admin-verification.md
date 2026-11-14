@@ -100,3 +100,8 @@ not counted as account coverage. The corrected selector and full suite cover all
 new tests. Normalized UTF-8 gofmt passed for all 42 tracked Go files; whitespace
 checks passed. There were no production changes after independent review; the
 remaining commit records this evidence only.
+
+The later isolated combined HTTPS/account verification, including the narrowly
+approved offline production-authenticated identity seam, is recorded in
+[account-admin-https-verification.md](account-admin-https-verification.md).
+Durable-resource preservation and broader lifecycle claims remain separate.
