@@ -72,4 +72,3 @@ these are not claimed as ready-writer-only metrics or transaction duration.
 The existing acquisition policy and two-second timeout are unchanged. Request
 completion observes the actual admitted child context before its normal cancel,
 so the application deadline is distinguishable from a completed response.
-
