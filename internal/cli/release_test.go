@@ -60,6 +60,7 @@ func repository(t *testing.T) (string, string) {
 	t.Setenv("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
 	dir := sourceFixture(t)
 	git(t, dir, "init")
+	registerGitCleanup(t, dir)
 	git(t, dir, "add", ".")
 	git(t, dir, "-c", "user.name=GoDav test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "synthetic source fixture")
 	return dir, git(t, dir, "rev-parse", "HEAD")
