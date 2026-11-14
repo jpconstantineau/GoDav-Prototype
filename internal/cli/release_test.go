@@ -147,16 +147,16 @@ func TestReleaseDirtySource(t *testing.T) {
 func TestReleaseRejectsUnavailableMetadata(t *testing.T) {
 	for _, kind := range []string{"no-repository", "unborn-head", "unreadable-status"} {
 		t.Run(kind, func(t *testing.T) {
-			t.Setenv("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
-			t.Setenv("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
-			dir := sourceFixture(t)
+			var dir string
+			if kind == "unreadable-status" {
+				dir, _ = repository(t)
+			} else {
+				dir = sourceFixture(t)
+			}
 			if kind == "unborn-head" {
 				git(t, dir, "init")
 			}
 			if kind == "unreadable-status" {
-				git(t, dir, "init")
-				git(t, dir, "add", ".")
-				git(t, dir, "-c", "user.name=GoDav test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "synthetic source fixture")
 				if e := os.WriteFile(filepath.Join(dir, ".git", "index"), []byte("invalid index"), 0644); e != nil {
 					t.Fatal(e)
 				}

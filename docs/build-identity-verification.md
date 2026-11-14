@@ -54,3 +54,15 @@ Help/version have only output effects; no config/DB/account/listener implementat
 exists in this slice. The full original acceptance spec is not claimed complete.
 Release source must remain unchanged during a build. Build flags preserve source
 paths for metadata inspection; byte reproducibility/path anonymization is not claimed.
+
+## Review cleanup verification
+
+The Standards review's duplicated fixture setup was consolidated by reusing
+repository(t) for the unreadable-status case. The missing-repository and unborn-HEAD
+cases and all public executable assertions remain unchanged; synthetic commits
+still use the fixed 2000-01-01 dates. This is a review-stage refactor, not new behavior.
+
+With process-scoped GOTOOLCHAIN=local and CGO_ENABLED=0 on Zen:
+- `go test ./... -count=1`: PASS, cli package 35.923s.
+- `go vet ./...`: PASS, no diagnostics.
+- `git diff --check`: PASS.
