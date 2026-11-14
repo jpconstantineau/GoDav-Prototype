@@ -63,7 +63,7 @@ func Init(config, username string, openConsole func() (*os.File, error)) (bool, 
 		}
 		defer console.Close()
 	}
-	settingsPin, err := pinPrivateDirectory(filepath.Dir(config))
+	settingsPin, err := pinPrivateDirectory(filepath.Dir(config), !existing)
 	if err != nil {
 		return false, errors.New("settings directory must be private")
 	}
@@ -93,7 +93,7 @@ func Init(config, username string, openConsole func() (*os.File, error)) (bool, 
 			return false, err
 		}
 	}
-	lock, err := acquireOwnership(dbPath + ".lock")
+	lock, err := acquireOwnership(dbPath+".lock", !existing)
 	if err != nil {
 		return false, errors.New("database is in use or ownership is unsafe")
 	}

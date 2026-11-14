@@ -179,3 +179,131 @@ func TestInitConfigRejectsSchemaWithoutConstraints(t *testing.T) {
 		}
 	}
 }
+
+func TestInitConfigRejectsNonStrictSchemaWithSpoofedMetadata(t *testing.T) {
+	bin := development(t)
+	dir := privateFixture(t)
+	_, _, _, code := privateConsoleCommand(t, dir, bin, "init", "config", "--username", "FixtureUser")
+	if code != 0 {
+		t.Fatal("fixture initialization failed")
+	}
+	file := filepath.Join(dir, "godav.sqlite")
+	u := url.URL{Scheme: "file", Path: "/" + filepath.ToSlash(file), RawQuery: "mode=rw"}
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		t.Fatal("schema fixture open failed")
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// Only mutate this freshly initialized disposable table. Preserve all
+	// records and constraints except STRICT, then spoof the bare PRAGMA name.
+	var name, create string
+	if db.QueryRowContext(ctx, "SELECT name, sql FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1").Scan(&name, &create) != nil || len(name) > 128 || len(create) > 65536 {
+		t.Fatal("schema fixture discovery failed")
+	}
+	_, body, found := strings.Cut(create, "(")
+	body = strings.TrimSpace(body)
+	if !found || !strings.HasSuffix(body, "STRICT") {
+		t.Fatal("fixture does not expose a removable STRICT option")
+	}
+	quote := func(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal("schema fixture transaction failed")
+	}
+	defer tx.Rollback()
+	for _, statement := range []string{
+		"CREATE TABLE godav_fixture_copy (" + strings.TrimSuffix(body, "STRICT"),
+		"INSERT INTO godav_fixture_copy SELECT * FROM " + quote(name),
+		"DROP TABLE " + quote(name),
+		"ALTER TABLE godav_fixture_copy RENAME TO " + quote(name),
+		"CREATE TABLE pragma_table_list (schema TEXT, name TEXT, type TEXT, strict INTEGER)",
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			t.Fatal("schema fixture construction failed")
+		}
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO pragma_table_list VALUES ('main', ?, 'table', 1)", name); err != nil {
+		t.Fatal("spoofed metadata fixture failed")
+	}
+	if tx.Commit() != nil || db.Close() != nil {
+		t.Fatal("schema fixture publication failed")
+	}
+	before, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal("schema fixture snapshot failed")
+	}
+	config := filepath.Join(dir, "godav.yaml")
+	settings, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal("settings fixture snapshot failed")
+	}
+	out, stderr, code := command(t, dir, bin, "init", "config", "--username", "FixtureUser")
+	if code != 1 || out != "" || stderr != "godav: invalid or unsupported database/account state\n" {
+		t.Fatal("spoofed metadata concealed a non-STRICT schema")
+	}
+	after, err := os.ReadFile(file)
+	afterSettings, settingsErr := os.ReadFile(config)
+	if err != nil || settingsErr != nil || sha256.Sum256(before) != sha256.Sum256(after) || string(settings) != string(afterSettings) {
+		t.Fatal("spoofed-metadata refusal changed persistent state")
+	}
+}
+
+func TestInitConfigRejectsShadowedMetadataFunctionsWithoutMutation(t *testing.T) {
+	bin := development(t)
+	for _, function := range []string{"pragma_table_xinfo", "pragma_index_list", "pragma_index_xinfo"} {
+		for _, kind := range []string{"table", "view"} {
+			t.Run(function+"/"+kind, func(t *testing.T) {
+				dir := privateFixture(t)
+				_, _, _, code := privateConsoleCommand(t, dir, bin, "init", "config", "--username", "FixtureUser")
+				if code != 0 {
+					t.Fatal("fixture initialization failed")
+				}
+				file := filepath.Join(dir, "godav.sqlite")
+				u := url.URL{Scheme: "file", Path: "/" + filepath.ToSlash(file), RawQuery: "mode=rw"}
+				db, err := sql.Open("sqlite", u.String())
+				if err != nil {
+					t.Fatal("metadata fixture open failed")
+				}
+				defer db.Close()
+				db.SetMaxOpenConns(1)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				var argument string
+				if db.QueryRowContext(ctx, "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1").Scan(&argument) != nil || len(argument) > 128 {
+					t.Fatal("metadata fixture discovery failed")
+				}
+				if function == "pragma_index_xinfo" {
+					if db.QueryRowContext(ctx, `SELECT name FROM pragma_index_list(?,'main') WHERE "unique"=1 LIMIT 1`, argument).Scan(&argument) != nil || len(argument) > 1024 {
+						t.Fatal("index fixture discovery failed")
+					}
+				}
+				// Copy genuine metadata to an ordinary object with the same name.
+				// Calls with arguments must fail closed, not consume those rows.
+				if _, err := db.ExecContext(ctx, "CREATE TABLE fixture_metadata AS SELECT * FROM "+function+"(?,'main') LIMIT 129", argument); err != nil {
+					t.Fatal("metadata fixture capture failed")
+				}
+				if _, err := db.ExecContext(ctx, "CREATE "+kind+" "+function+" AS SELECT * FROM fixture_metadata"); err != nil {
+					t.Fatal("shadowed metadata fixture failed")
+				}
+				if db.Close() != nil {
+					t.Fatal("metadata fixture close failed")
+				}
+				before, err := os.ReadFile(file)
+				if err != nil {
+					t.Fatal("metadata fixture snapshot failed")
+				}
+				out, stderr, code := command(t, dir, bin, "init", "config", "--username", "FixtureUser")
+				if code != 1 || out != "" || stderr != "godav: invalid or unsupported database/account state\n" {
+					t.Fatal("shadowed metadata function did not fail closed")
+				}
+				after, err := os.ReadFile(file)
+				if err != nil || sha256.Sum256(before) != sha256.Sum256(after) {
+					t.Fatal("shadowed metadata refusal changed database")
+				}
+			})
+		}
+	}
+}

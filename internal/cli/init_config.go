@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/bootstrap"
 )
 
@@ -26,7 +27,7 @@ func initConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "godav: init config requires --username")
 		return 2
 	}
-	if !validUsername(username.value) {
+	if !auth.ValidUsername(username.value) {
 		fmt.Fprintln(stderr, "godav: invalid username")
 		return 2
 	}
@@ -62,18 +63,4 @@ func (v *uniqueString) Set(value string) error {
 	}
 	v.value, v.set = value, true
 	return nil
-}
-
-func validUsername(name string) bool {
-	if len(name) == 0 || len(name) > 64 {
-		return false
-	}
-	for i := range len(name) {
-		c := name[i]
-		alphanumeric := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
-		if !alphanumeric && (i == 0 || c != '.' && c != '_' && c != '-') {
-			return false
-		}
-	}
-	return true
 }

@@ -11,11 +11,16 @@ import (
 // Limits bound metadata materialized in Go, including the CREATE statement.
 func validateSchema(ctx context.Context, db *sql.DB) error {
 	invalid := errors.New("invalid account schema")
-	var ordinary, strict int
-	if err := db.QueryRowContext(ctx, `SELECT type='table', strict FROM pragma_table_list
-WHERE schema='main' AND name='accounts' COLLATE NOCASE`).Scan(&ordinary, &strict); err != nil || ordinary != 1 || strict != 1 {
+	// Use the actual PRAGMA: a bare pragma_table_list name can resolve to an
+	// ordinary stored table and let untrusted state spoof its own metadata.
+	var schema, name, kind string
+	var columns, withoutRowID, strict int
+	if err := db.QueryRowContext(ctx, `PRAGMA main.table_list('accounts')`).Scan(&schema, &name, &kind, &columns, &withoutRowID, &strict); err != nil ||
+		schema != "main" || !strings.EqualFold(name, "accounts") || kind != "table" || strict != 1 {
 		return invalid
 	}
+	// The remaining PRAGMA table functions require arguments. Ordinary tables
+	// or views with those names fail as non-functions rather than supply rows.
 	rows, err := db.QueryContext(ctx, `SELECT CASE WHEN octet_length(name)<=128 THEN name END,
 CASE WHEN octet_length(type)<=16 THEN type END, "notnull", pk, hidden
 FROM pragma_table_xinfo('accounts','main') LIMIT 65`)

@@ -19,6 +19,22 @@ type Account struct {
 
 const verifierPrefix = "$argon2id$v=19$m=19456,t=2,p=1$"
 
+// ValidUsername defines the account-domain policy shared by CLI input and
+// persisted-state validation: 1-64 ASCII bytes, starting with an alphanumeric.
+func ValidUsername(name string) bool {
+	if len(name) == 0 || len(name) > 64 {
+		return false
+	}
+	for i := range len(name) {
+		c := name[i]
+		alphanumeric := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+		if !alphanumeric && (i == 0 || c != '.' && c != '_' && c != '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // Validate rejects unsupported or excessive verifier costs before any future
 // authentication code can allocate hash work from stored parameters.
 func (a Account) Validate() error {
@@ -30,15 +46,8 @@ func (a Account) Validate() error {
 	if err != nil || len(id) != 16 || hex.EncodeToString(id) != a.ID {
 		return bad
 	}
-	if len(a.Name) < 1 || len(a.Name) > 64 || a.Key != strings.ToLower(a.Name) {
+	if !ValidUsername(a.Name) || a.Key != strings.ToLower(a.Name) {
 		return bad
-	}
-	for i := range len(a.Name) {
-		c := a.Name[i]
-		letterOrDigit := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
-		if !letterOrDigit && (i == 0 || c != '.' && c != '_' && c != '-') {
-			return bad
-		}
 	}
 	if _, err := time.Parse(time.RFC3339Nano, a.Created); err != nil {
 		return bad

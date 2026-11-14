@@ -80,11 +80,16 @@ func TestInitConfigExistingStateSurvivesNoninteractiveRestart(t *testing.T) {
 
 func privateFixture(t *testing.T) string {
 	t.Helper()
+	return privateFixtureWithInheritance(t, "OICI")
+}
+
+func privateFixtureWithInheritance(t *testing.T, inheritance string) string {
+	t.Helper()
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal("fixture token lookup failed")
 	}
-	sd, err := windows.SecurityDescriptorFromString("O:" + user.User.Sid.String() + "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;" + user.User.Sid.String() + ")")
+	sd, err := windows.SecurityDescriptorFromString("O:" + user.User.Sid.String() + "D:P(A;" + inheritance + ";FA;;;SY)(A;" + inheritance + ";FA;;;BA)(A;" + inheritance + ";FA;;;" + user.User.Sid.String() + ")")
 	if err != nil {
 		t.Fatal("fixture descriptor failed")
 	}
@@ -98,6 +103,87 @@ func privateFixture(t *testing.T) string {
 		t.Fatal("private fixture creation failed")
 	}
 	return dir
+}
+
+func writeRestrictedFixtureFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal("fixture token lookup failed")
+	}
+	sd, err := windows.SecurityDescriptorFromString("O:" + user.User.Sid.String() + "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + user.User.Sid.String() + ")")
+	if err != nil {
+		t.Fatal("fixture descriptor failed")
+	}
+	p, _ := windows.UTF16PtrFromString(path)
+	sa := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
+	h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, &sa, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal("private file fixture creation failed")
+	}
+	f := os.NewFile(uintptr(h), path)
+	defer f.Close()
+	if _, err := f.Write(data); err != nil {
+		t.Fatal("private file fixture write failed")
+	}
+	if f.Close() != nil {
+		t.Fatal("private file fixture close failed")
+	}
+}
+
+func TestInitConfigRejectsNonInheritingPrivateDirectoryBeforeWrites(t *testing.T) {
+	bin := development(t)
+	for _, inheritance := range []string{"", "CI"} {
+		dir := privateFixtureWithInheritance(t, inheritance)
+		// A safe pre-existing lock must not disguise the absence of a private
+		// creation policy for the database and SQLite-created rollback journal.
+		lockPath := filepath.Join(dir, "godav.sqlite.lock")
+		writeRestrictedFixtureFile(t, lockPath, nil)
+		before, err := os.Stat(lockPath)
+		if err != nil {
+			t.Fatal("private lock fixture inspection failed")
+		}
+		console, out, stderr, code := privateConsoleCommand(t, dir, bin, "init", "config", "--username", "FixtureUser")
+		if code != 1 || out != "" || stderr == "" || strings.Contains(console, "Initial password:") {
+			t.Fatal("private parent without file inheritance was not refused")
+		}
+		entries, err := os.ReadDir(dir)
+		after, statErr := os.Stat(lockPath)
+		if err != nil || statErr != nil || len(entries) != 1 || !os.SameFile(before, after) || after.Size() != 0 {
+			t.Fatal("creation-policy refusal modified fixture state")
+		}
+	}
+}
+
+func TestInitConfigPreservesExistingStateWithoutDirectoryInheritance(t *testing.T) {
+	bin := development(t)
+	source := privateFixture(t)
+	_, _, _, code := privateConsoleCommand(t, source, bin, "init", "config", "--username", "FixtureUser")
+	if code != 0 {
+		t.Fatal("fixture initialization failed")
+	}
+	// Create new copies with explicit private file DACLs. Do not change any
+	// existing directory ACL or the process token's default DACL.
+	dir := privateFixtureWithInheritance(t, "")
+	before := map[string][sha256.Size]byte{}
+	for _, name := range []string{"godav.yaml", "godav.sqlite", "godav.sqlite.lock"} {
+		data, err := os.ReadFile(filepath.Join(source, name))
+		if err != nil {
+			t.Fatal("private source fixture read failed")
+		}
+		writeRestrictedFixtureFile(t, filepath.Join(dir, name), data)
+		before[name] = sha256.Sum256(data)
+	}
+	out, stderr, code := command(t, dir, bin, "init", "config", "--username", "FixtureUser")
+	if code != 0 || stderr != "" || out != "godav: already initialized\n" {
+		t.Fatal("safe existing state required unnecessary directory inheritance")
+	}
+	for name, digest := range before {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || sha256.Sum256(data) != digest {
+			t.Fatal("existing-state validation changed private fixture data")
+		}
+	}
 }
 
 func TestInitConfigFreshDisclosesOnlyToPrivateConsole(t *testing.T) {
@@ -124,6 +210,21 @@ func TestInitConfigFreshDisclosesOnlyToPrivateConsole(t *testing.T) {
 	db, err := os.ReadFile(filepath.Join(dir, "godav.sqlite"))
 	if err != nil || !bytes.HasPrefix(db, []byte("SQLite format 3\x00")) || bytes.Contains(db, []byte(secrets[0][1])) {
 		t.Fatal("fresh initialization did not persist a SQLite store without plaintext password")
+	}
+}
+
+func TestInitConfigUsernameBoundariesSurviveRestart(t *testing.T) {
+	bin := development(t)
+	for _, name := range []string{"0", "Z" + strings.Repeat("a", 60) + "._-"} {
+		dir := privateFixture(t)
+		_, out, stderr, code := privateConsoleCommand(t, dir, bin, "init", "config", "--username", name)
+		if code != 0 || stderr != "" || out != "godav: initialized; configure TLS before serving\n" {
+			t.Fatal("valid boundary username was not accepted")
+		}
+		out, stderr, code = command(t, dir, bin, "init", "config", "--username", name)
+		if code != 0 || stderr != "" || out != "godav: already initialized\n" {
+			t.Fatal("persisted boundary username was not valid on restart")
+		}
 	}
 }
 

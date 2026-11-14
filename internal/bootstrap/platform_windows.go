@@ -133,7 +133,7 @@ func checkPath(path string, allowMissing bool) error {
 // restrictedACL is a deliberately conservative allowlist, not a complete
 // effective-access analysis. It rejects deny/object/callback/unknown ACE forms
 // rather than trying to evaluate them, and inspects inherit-only ACEs too.
-func restrictedACL(handle windows.Handle) error {
+func restrictedACL(handle windows.Handle, requireFileInheritance bool) error {
 	user, err := windows.GetCurrentThreadEffectiveToken().GetTokenUser()
 	if err != nil {
 		return errPrivateDirectory
@@ -161,6 +161,7 @@ func restrictedACL(handle windows.Handle) error {
 	if err != nil || acl == nil {
 		return errPrivateDirectory
 	}
+	fileInheritance := false
 	for i := uint32(0); i < uint32(acl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if windows.GetAce(acl, i, &ace) != nil || ace == nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceSize < 16 || ace.Header.AceFlags & ^uint8(0x1f) != 0 {
@@ -174,13 +175,23 @@ func restrictedACL(handle windows.Handle) error {
 		if length > int(ace.Header.AceSize)-8 || !allowed((*windows.SID)(sidPointer)) {
 			return errPrivateDirectory
 		}
+		if ace.Header.AceFlags&windows.OBJECT_INHERIT_ACE != 0 && ace.Mask != 0 {
+			fileInheritance = true
+		}
 	}
 	runtime.KeepAlive(sd)
+	// Without file-inheritable ACEs, newly created files can fall back to the
+	// process token's default DACL. A private directory alone does not protect
+	// known child paths. Require a restricted inheritance policy before fresh
+	// writes, including SQLite's own journal creation, without repairing ACLs.
+	if requireFileInheritance && !fileInheritance {
+		return errPrivateDirectory
+	}
 	return nil
 }
 
 func checkPrivateDirectory(path string) error {
-	pin, err := pinPrivateDirectory(path)
+	pin, err := pinPrivateDirectory(path, false)
 	if err != nil {
 		return err
 	}
@@ -207,12 +218,12 @@ func (pin *privateDirectoryPin) Close() error {
 // FILE_SHARE_DELETE, preventing directory substitution during the operation.
 // This does not freeze ACLs against the owner, SYSTEM or administrators, and is
 // not intended to protect against a malicious process running as those actors.
-func pinPrivateDirectory(path string) (io.Closer, error) {
+func pinPrivateDirectory(path string, requireFileInheritance bool) (io.Closer, error) {
 	handles, err := openCheckedPathAccess(path, false, true, windows.READ_CONTROL)
 	if err != nil {
 		return nil, err
 	}
-	if err := restrictedACL(handles[len(handles)-1]); err != nil {
+	if err := restrictedACL(handles[len(handles)-1], requireFileInheritance); err != nil {
 		closePathHandles(handles)
 		return nil, err
 	}
@@ -229,7 +240,7 @@ func checkPrivateObject(path string, directory bool) error {
 		return err
 	}
 	defer closePathHandles(handles)
-	return restrictedACL(handles[len(handles)-1])
+	return restrictedACL(handles[len(handles)-1], false)
 }
 
 type ownership struct {
@@ -251,11 +262,11 @@ func (lock *ownership) Close() error {
 	return err
 }
 
-func acquireOwnership(path string) (io.Closer, error) {
+func acquireOwnership(path string, requireFileInheritance bool) (io.Closer, error) {
 	if err := checkPath(path, true); err != nil {
 		return nil, err
 	}
-	parents, err := pinPrivateDirectory(filepath.Dir(path))
+	parents, err := pinPrivateDirectory(filepath.Dir(path), requireFileInheritance)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +287,7 @@ func acquireOwnership(path string) (io.Closer, error) {
 	}
 	var info windows.ByHandleFileInformation
 	if validatePathHandle(h, path, false) != nil || windows.GetFileInformationByHandle(h, &info) != nil ||
-		info.FileSizeHigh != 0 || info.FileSizeLow != 0 || restrictedACL(h) != nil {
+		info.FileSizeHigh != 0 || info.FileSizeLow != 0 || restrictedACL(h, false) != nil {
 		windows.CloseHandle(h)
 		return nil, errors.New("bootstrap ownership artifact is unsafe")
 	}

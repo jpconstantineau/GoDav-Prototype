@@ -21,6 +21,9 @@ Observe exit status, nonsecret output, settings, persistence and restart. Do not
 assert private SQL layout. Later real HTTPS authentication in slice 03 establishes
 credential usability; password reset belongs to slice 10 / issue #11. Neither is
 proved by this slice alone. Work one failing behavior and implementation at a time.
+Approved malformed-state fixtures may use bounded SQLite metadata to remove
+schema constraints or shadow metadata names. Their assertions remain actual CLI
+refusal and unchanged persistent state, not private helper calls or SQL formatting.
 
 Development uses the verified project-local Go 1.27.4 toolchain through
 `GoDav-Project-Tools/Use-VerifiedGo.ps1` in disposable shells. Do not change
@@ -64,6 +67,18 @@ Administrators only; it is not a complete effective-access calculation. Refuse
 broader or unrecognized grants rather than repairing permissions. Newly created
 test fixtures use a protected DACL at creation; no parent directory ACL changes.
 
+Fresh provisioning additionally requires at least one nonzero file-inheritable
+allow ACE in the restricted DACL of each retained settings/database parent. A
+private directory with only non-inheriting or directory-only inheritance ACEs
+is refused before state writes. This ensures the DB, temporary YAML and SQLite's
+own rollback journal inherit restricted grants at creation, rather than falling
+back to the process token's default DACL. Checking only the new main file after
+creation would not protect journal creation. Existing read-only validation does
+not require directory inheritance when the directory and existing files already
+pass their private owner/DACL checks. No existing permissions or token defaults
+are changed. See Microsoft's [new-object DACL algorithm](https://learn.microsoft.com/en-us/windows/win32/secauthz/dacl-for-a-new-object)
+and [independent child-file access rules](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights).
+
 Fresh provisioning validates the real private console before any state write,
 including creation of an ownership artifact. Existing-valid no-op does not
 require a console; it may create/acquire stable empty lock metadata, but leaves
@@ -106,6 +121,12 @@ every logically equivalent SQL expression. Encoded account fields are byte-bound
 with octet_length before materialization (SQL length(TEXT) stops at NUL), then
 checked again before Go decoders. These checks do not prove a total process-memory
 bound for arbitrary hostile SQLite files.
+
+Read STRICT/table-kind metadata through the actual schema-qualified
+`PRAGMA main.table_list('accounts')`, not a bare `pragma_table_list` relation
+that a stored table can shadow. Other metadata queries use table functions with
+arguments; ordinary tables/views shadowing these names fail closed. No stored SQL
+is executed by production validation. See [SQLite PRAGMA documentation](https://www.sqlite.org/pragma.html#pragma_table_list).
 
 Generate the password and verifier outside the DB writer transaction. Commit the
 initial versioned schema and account atomically. Then publish complete YAML

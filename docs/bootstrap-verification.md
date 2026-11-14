@@ -1,7 +1,70 @@
 # Slice 02 verification
 
-Date: 2026-11-14. Native host: Zen, Windows amd64. Worktree branch:
+Date: 2026-11-14. Native host: Zen, Windows amd64. Initial worktree branch:
 codex/godav-02-bootstrap, based on reviewed integration bf6e765.
+
+## Fixed-commit review corrections
+
+Correction worktree: `ticket-02-review-fixes`, branch
+`codex/godav-02-review-fixes`, based on candidate
+`6167167137bb107d8f126d776654c9fe6f4d4bee`. Integration `bf6e765` is an ancestor.
+No merge, push or tracker mutation was performed by the correction pass.
+
+Actual CLI red/green evidence:
+
+- A newly created private directory with no inheritable ACEs and a restricted
+  precreated empty lock was previously accepted for fresh provisioning. It is now
+  refused before writes. Directory-only inheritance is also refused. This tests
+  the missing creation-policy check, not credential exposure under a changed
+  process-token default DACL. No token default or existing directory ACL changed.
+- Existing valid files copied with explicit private creation DACLs into a new
+  non-inheriting private directory still pass a byte-preserving noninteractive
+  no-op. Ordinary inheriting fresh fixtures and headless zero-write refusal pass.
+- An ordinary `pragma_table_list` table previously concealed a non-STRICT account
+  table while preserving its other constraints and records. The actual PRAGMA
+  now rejects this fixture with DB/YAML bytes unchanged. Table and view shadows
+  of the other three argument-bearing metadata functions fail closed unchanged.
+- Username validation now has one account-domain predicate. One-character and
+  64-character valid names survive initialization/restart; invalid leading
+  punctuation, non-ASCII, whitespace, newline and overlong names retain sanitized
+  usage refusals. These were passing baseline/refactor tests, not invented red
+  evidence for a behavior-preserving extraction.
+
+Fresh aggregate evidence is persisted outside the repository in
+`GoDav-Project-Tools/logs/slice02-reviewfix-*-20261114.log`:
+
+- Full `go test ./... -count=1 -v -timeout=5m`: passed, CLI package 98.087 seconds.
+  Includes release fault-tag/marker exclusion and exact companion notices for
+  Windows/Linux builds; Windows version executed, Linux artifact inspected only.
+- Windows and Linux `go vet ./...`: passed. `go mod verify`: passed.
+- Initial `go mod tidy -diff` found CRLF-only module-checksum differences from the
+  fresh Windows checkout. Normalization matched the committed module content
+  exactly, and the repeated check passed without dependency changes.
+  `.gitattributes` now keeps only `go.mod`/`go.sum` LF on fresh checkouts.
+- Windows/Linux application and `-test` govulncheck v1.9.0: all four scans passed
+  with no known vulnerabilities, on the verified Go 1.27.4 compiler and unchanged
+  dependency pins. Windows covered 12 modules and Linux 11, including the app.
+- Bounded `CGO_ENABLED=1 go test -race ./internal/cli -run '^TestInitConfig'
+  -count=1 -v -timeout=5m` passed in 65.635 seconds using the existing MSYS2 GCC
+  14.2.0. This instruments the harness and in-process fixture code, not the
+  CGO-free CLI subprocesses. Competing-process behavior has its own CLI test.
+- Final focused correction and release-identity rerun passed in 21.566 seconds.
+
+The log suffixes identify `dacl-red`, `dacl-green`, `dacl-preservation`,
+`metadata-red`, `metadata-green`, `username-baseline`, `username-refactor`,
+`full-suite`, `vet-windows`, `vet-linux`, `mod-verify`, `tidy-diff`,
+`module-line-endings`, `tidy-diff-lf`, and the four
+`vuln-{windows,linux}-{application,tests}` runs, plus `race-harness` and
+`final-focused`. Toolchain/scanner/GCC version logs identify the actual tools.
+Expected red logs and the initial line-ending failure are retained rather than
+overwritten.
+
+The retained-parent ACL policy protects SQLite-created journals from inception;
+it does not freeze permission changes by the authorized owner/administrators.
+Hostile parent swaps/reparse paths, broad token defaults, actual interrupted
+writes/power loss and Linux runtime remain unproved. Prior hardlink/junction
+creation denials were not retried. Independent re-review of the correction commit
+is still required.
 
 ## Toolchain and dependencies
 

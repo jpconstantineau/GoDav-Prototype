@@ -22,7 +22,7 @@ func TestInitConfigRequiresExplicitUsernameWithoutMutation(t *testing.T) {
 
 func TestInitConfigRejectsInvalidUsernameWithoutEchoOrMutation(t *testing.T) {
 	bin := development(t)
-	for _, username := range []string{"-leading", "contains space", "naïve", "name:secret", strings.Repeat("a", 65)} {
+	for _, username := range []string{"-leading", "_leading", ".leading", "contains space", "naïve", "name:secret", "name\n", strings.Repeat("a", 65)} {
 		dir := t.TempDir()
 		out, stderr, code := command(t, dir, bin, "init", "config", "--username", username)
 		if code != 2 || out != "" || stderr != "godav: invalid username\n" {
