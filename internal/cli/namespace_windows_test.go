@@ -90,7 +90,7 @@ func TestNamespaceInProcessConcurrentHTTPAndStop(t *testing.T) {
 			req, _ := http.NewRequest(method, f.origin+path, nil)
 			req.SetBasicAuth("FixtureUser", f.password)
 			req.Header.Set("Depth", "1")
-			response, err := client.Do(req)
+			response, err := retryAdmission(client, req)
 			if err != nil {
 				statuses <- 0
 				return

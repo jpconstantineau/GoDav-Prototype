@@ -20,6 +20,12 @@ import (
 // UpdateProcThreadAttribute documentation. STARTF_USESTDHANDLES plus an explicit
 // HANDLE_LIST separates routine channels from writes opening CONOUT$ directly.
 func privateConsoleCommand(t *testing.T, dir, executable string, args ...string) (console, stdout, stderr string, exitCode int) {
+	return privateConsoleInteraction(t, dir, executable, nil, args...)
+}
+
+// privateConsoleInteraction sends input only to this disposable child pseudoconsole.
+// The callback reads sanitized assertions from memory; never print its captures.
+func privateConsoleInteraction(t *testing.T, dir, executable string, interact func(*os.File, func() string), args ...string) (console, stdout, stderr string, exitCode int) {
 	t.Helper()
 	kernel := syscall.NewLazyDLL("kernel32.dll")
 	createConsole := kernel.NewProc("CreatePseudoConsole")
@@ -67,7 +73,7 @@ func privateConsoleCommand(t *testing.T, dir, executable string, args ...string)
 		bad  bool
 	}
 	stop := make(chan struct{})
-	startReader := func(file *os.File) <-chan capture {
+	startReader := func(file *os.File, live *safeCapture) <-chan capture {
 		done := make(chan capture, 1)
 		go func() {
 			var buffer bytes.Buffer
@@ -101,6 +107,9 @@ func privateConsoleCommand(t *testing.T, dir, executable string, args ...string)
 				// Continue draining after the cap to avoid blocking console shutdown.
 				if buffer.Len()+int(n) <= 1<<20 {
 					buffer.Write(scratch[:n])
+					if live != nil {
+						_, _ = live.Write(scratch[:n])
+					}
 				} else {
 					bad = true
 				}
@@ -108,7 +117,8 @@ func privateConsoleCommand(t *testing.T, dir, executable string, args ...string)
 		}()
 		return done
 	}
-	readers := []<-chan capture{startReader(consoleR), startReader(outR), startReader(errR)}
+	liveErrors := &safeCapture{}
+	readers := []<-chan capture{startReader(consoleR, nil), startReader(outR, nil), startReader(errR, liveErrors)}
 	joined := make([]bool, len(readers))
 	defer func() {
 		close(stop)
@@ -208,6 +218,9 @@ func privateConsoleCommand(t *testing.T, dir, executable string, args ...string)
 	stdin.Close()
 	syscall.ForkLock.Unlock()
 	inheritanceLocked = false
+	if interact != nil {
+		interact(inW, liveErrors.String)
+	}
 	state, waitErr := syscall.WaitForSingleObject(process.Process, 30000)
 	if waitErr != nil || state != syscall.WAIT_OBJECT_0 {
 		t.Fatal("private console process exceeded deadline or could not be waited")

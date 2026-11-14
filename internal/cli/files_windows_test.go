@@ -890,7 +890,7 @@ func TestFilesInProcessConcurrentSnapshots(t *testing.T) {
 			}
 			req, _ := http.NewRequest("PUT", f.origin+path, bytes.NewReader(payload))
 			req.SetBasicAuth("FixtureUser", f.password)
-			response, err := client.Do(req)
+			response, err := retryAdmission(client, req)
 			if err != nil {
 				results <- 0
 				return
@@ -902,12 +902,19 @@ func TestFilesInProcessConcurrentSnapshots(t *testing.T) {
 	}
 	close(start)
 	for range 10 {
-		code, _, data := fileRequest(t, client, f, "GET", "/dav/RACE", nil, nil)
+		code, headers, data := fileRequest(t, client, f, "GET", "/dav/RACE", nil, nil)
+		if code == 503 && admissionRefusal(headers) {
+			continue
+		}
 		if code != 404 && (code != 200 || (!bytes.Equal(data, a) && !bytes.Equal(data, b))) {
 			t.Fatal("reader saw a torn or invalid concurrent snapshot")
 		}
 	}
 	wg.Wait()
+	code, _, data := fileRequest(t, client, f, "GET", "/dav/RACE", nil, nil)
+	if code != 200 || (!bytes.Equal(data, a) && !bytes.Equal(data, b)) {
+		t.Fatal("final concurrent snapshot invalid")
+	}
 	close(results)
 	codes := []int{}
 	for code := range results {

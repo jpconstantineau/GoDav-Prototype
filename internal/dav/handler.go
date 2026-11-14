@@ -20,7 +20,7 @@ type AccountLookup interface {
 func Handler(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64) http.Handler {
 	u, _ := url.Parse(origin)
 	expected, _ := parseAuthority(u.Host)
-	slots := make(chan struct{}, 4)
+	slots := make(chan struct{}, 2)
 	mux := http.NewServeMux()
 	root := discovery(collections, maxBytes)
 	mux.Handle("/dav", root)
@@ -47,22 +47,30 @@ func Handler(accounts AccountLookup, collections *files.Service, origin string, 
 		}
 		select {
 		case slots <- struct{}{}:
-			defer func() { <-slots }()
 		default:
 			status = 503
+			w.Header().Set("GoDav-Rejection", "authentication")
 			http.Error(w, "Service Unavailable", status)
 			return
 		}
-		account, found, err := accounts.LookupEnabled(r.Context(), username)
+		// Expensive verification is bounded separately from admitted DAV work.
+		// No receiving upload or slow response retains an authentication permit.
+		found, matches, err := func() (bool, bool, error) {
+			defer func() { <-slots }()
+			account, found, err := accounts.LookupEnabled(r.Context(), username)
+			if err != nil {
+				return false, false, err
+			}
+			if !found {
+				account = auth.DummyAccount()
+			}
+			matches := account.VerifyPassword(password)
+			return found, matches, r.Context().Err()
+		}()
 		if err != nil {
-			status = 503
-			http.Error(w, "Service Unavailable", status)
+			http.Error(w, "Service Unavailable", 503)
 			return
 		}
-		if !found {
-			account = auth.DummyAccount()
-		}
-		matches := account.VerifyPassword(password)
 		if !found || !matches {
 			reject()
 			return
@@ -73,26 +81,43 @@ func Handler(accounts AccountLookup, collections *files.Service, origin string, 
 
 type statusWriter struct {
 	http.ResponseWriter
-	status int
+	status      int
+	writeFailed bool
 }
 
 func (w *statusWriter) WriteHeader(status int) {
-	if w.status == 0 {
-		w.status = status
+	if status >= 100 && status < 200 {
+		w.ResponseWriter.WriteHeader(status)
+		return
 	}
+	if w.status != 0 {
+		return
+	}
+	w.status = status
 	w.ResponseWriter.WriteHeader(status)
 }
 func (w *statusWriter) Write(p []byte) (int, error) {
 	if w.status == 0 {
 		w.WriteHeader(200)
 	}
-	return w.ResponseWriter.Write(p)
-}
-func (w *statusWriter) code() int {
-	if w.status == 0 {
-		return 200
+	n, err := w.ResponseWriter.Write(p)
+	if err != nil {
+		w.writeFailed = true
 	}
-	return w.status
+	return n, err
+}
+func (w *statusWriter) code() int { return w.status }
+func (w *statusWriter) outcome(ctx context.Context) string {
+	if w.writeFailed {
+		return "write-failed"
+	}
+	if ctx.Err() != nil {
+		return "cancelled"
+	}
+	if w.status == 0 {
+		return "no-response"
+	}
+	return "response"
 }
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
@@ -105,7 +130,7 @@ func Trace(logger *slog.Logger, next http.Handler) http.Handler {
 		id := ids.Add(1)
 		record := &statusWriter{ResponseWriter: w}
 		defer func() {
-			logger.Info("request", "method", safeMethod(r.Method), "path", safePath(r), "status", record.code(), "duration", time.Since(start), "request_id", id)
+			logger.Info("request", "method", safeMethod(r.Method), "path", safePath(r), "status", record.code(), "outcome", record.outcome(r.Context()), "duration", time.Since(start), "request_id", id)
 		}()
 		next.ServeHTTP(record, r)
 	})

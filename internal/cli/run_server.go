@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,8 +26,16 @@ func runServer(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	if server.Run(ctx, path, server.Identity{Revision: revision, BuildTime: buildTime, Source: sourceState}, stderr) != nil {
-		fmt.Fprintln(stderr, "godav: server startup failed")
+	if err := server.Run(ctx, path, server.Identity{Revision: revision, BuildTime: buildTime, Source: sourceState}, stderr); err != nil {
+		if errors.Is(err, server.ErrShutdownFailed) {
+			fmt.Fprintln(stderr, "godav: server shutdown failed")
+		} else if errors.Is(err, server.ErrShutdownDeadline) {
+			fmt.Fprintln(stderr, "godav: shutdown deadline expired; unfinished work cancelled")
+		} else if errors.Is(err, server.ErrServing) {
+			fmt.Fprintln(stderr, "godav: HTTPS serving failed")
+		} else {
+			fmt.Fprintln(stderr, "godav: server startup failed")
+		}
 		return 1
 	}
 	return 0

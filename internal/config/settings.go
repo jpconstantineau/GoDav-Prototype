@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/winpath"
@@ -32,6 +33,7 @@ type Settings struct {
 	KeyFile              string
 	AuthenticationMethod string
 	MaxFileBytes         int64
+	ShutdownGrace        time.Duration
 }
 
 var errSettings = errors.New("invalid or inaccessible settings")
@@ -81,6 +83,9 @@ func Load(filename string) (Settings, error) {
 	}
 	limits, ok := mapping(root["limits"], "max_file_bytes")
 	if !ok {
+		limits, ok = mapping(root["limits"], "max_file_bytes", "shutdown_grace_ms")
+	}
+	if !ok {
 		return result, errSettings
 	}
 	version, ok := positiveInt(root["config_version"])
@@ -91,6 +96,13 @@ func Load(filename string) (Settings, error) {
 	if !ok || maxBytes > files.AbsoluteMaxFileBytes {
 		return result, errSettings
 	}
+	graceMS := int64(5000)
+	if node := limits["shutdown_grace_ms"]; node != nil {
+		graceMS, ok = positiveInt(node)
+		if !ok || graceMS > 30000 {
+			return result, errSettings
+		}
+	}
 	for _, node := range []*yaml.Node{root["listen_address"], root["public_origin"], root["dav_prefix"], root["database_path"], tls["cert_file"], tls["key_file"], auth["method"]} {
 		if node.Kind != yaml.ScalarNode || node.Tag != "!!str" || node.Value == "" {
 			return result, errSettings
@@ -99,7 +111,7 @@ func Load(filename string) (Settings, error) {
 	result = Settings{
 		ConfigVersion: version, ListenAddress: root["listen_address"].Value,
 		PublicOrigin: root["public_origin"].Value, DAVPrefix: root["dav_prefix"].Value,
-		AuthenticationMethod: auth["method"].Value, MaxFileBytes: maxBytes,
+		AuthenticationMethod: auth["method"].Value, MaxFileBytes: maxBytes, ShutdownGrace: time.Duration(graceMS) * time.Millisecond,
 	}
 	if result.AuthenticationMethod != "basic" || !validEndpoints(result) || !validPrefix(result.DAVPrefix) {
 		return Settings{}, errSettings

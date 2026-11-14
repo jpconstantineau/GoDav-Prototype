@@ -24,6 +24,12 @@ import (
 
 type Identity struct{ Revision, BuildTime, Source string }
 
+var (
+	ErrShutdownDeadline = errors.New("shutdown deadline expired")
+	ErrShutdownFailed   = errors.New("shutdown failed")
+	ErrServing          = errors.New("HTTPS serving failed")
+)
+
 func Run(ctx context.Context, configPath string, identity Identity, output io.Writer) (result error) {
 	muxSetting := ""
 	for _, entry := range strings.Split(os.Getenv("GODEBUG"), ",") {
@@ -38,9 +44,26 @@ func Run(ctx context.Context, configPath string, identity Identity, output io.Wr
 	if err != nil {
 		return err
 	}
+	var logger *slog.Logger
+	ready := false
+	var stopStarted time.Time
 	defer func() {
-		if state.Close() != nil && result == nil {
-			result = errors.New("local state close failed")
+		if ready {
+			logger.Info("shutdown", "phase", "closing-state")
+		}
+		if state.Close() != nil {
+			result = errors.Join(result, ErrShutdownFailed)
+		}
+		if ready {
+			outcome := "clean"
+			if errors.Is(result, ErrShutdownFailed) {
+				outcome = "failure"
+			} else if errors.Is(result, ErrShutdownDeadline) {
+				outcome = "cancelled"
+			} else if result != nil {
+				outcome = "failure"
+			}
+			logger.Info("stopped", "result", outcome, "duration", time.Since(stopStarted))
 		}
 	}()
 	settings := state.Settings()
@@ -79,7 +102,7 @@ func Run(ctx context.Context, configPath string, identity Identity, output io.Wr
 	if pair.Leaf == nil || pair.Leaf.VerifyHostname(origin.Hostname()) != nil || now.Before(pair.Leaf.NotBefore) || !now.Before(pair.Leaf.NotAfter) {
 		return errors.New("TLS certificate invalid")
 	}
-	logger := slog.New(slog.NewTextHandler(output, nil))
+	logger = slog.New(slog.NewTextHandler(output, nil))
 	listener, err := net.Listen("tcp", settings.ListenAddress)
 	if err != nil {
 		return errors.New("HTTPS bind failed")
@@ -91,8 +114,8 @@ func Run(ctx context.Context, configPath string, identity Identity, output io.Wr
 	if err := state.Accounts().PrepareFiles(ctx); err != nil {
 		return errors.New("file preparation failed")
 	}
-	users := &requestUsers{}
-	requestCtx, cancelRequests := context.WithCancel(ctx)
+	users := &requestUsers{logger: logger}
+	requestCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
 	protocols := &http.Protocols{}
 	protocols.SetHTTP1(true)
 	srv := &http.Server{
@@ -109,25 +132,42 @@ func Run(ctx context.Context, configPath string, identity Identity, output io.Wr
 		MaxHeaderValueCount:          100,
 		ErrorLog:                     log.New(transportLog{logger}, "", 0),
 	}
-	defer func() { users.stop(); cancelRequests(); _ = srv.Close(); users.wait() }()
 	done := make(chan error, 1)
-	go func() { done <- srv.Serve(tls.NewListener(listener, srv.TLSConfig)) }()
+	go func() {
+		done <- srv.Serve(tls.NewListener(&boundedListener{Listener: listener, permits: make(chan struct{}, maxConnections), logger: logger}, srv.TLSConfig))
+	}()
+	ready = true
 	logger.Info("ready", "revision", identity.Revision, "build-time", identity.BuildTime, "source", identity.Source)
 	select {
-	case err := <-done:
-		if !errors.Is(err, http.ErrServerClosed) {
-			return errors.New("HTTPS serving failed")
+	case serveErr := <-done:
+		stopStarted = time.Now()
+		if !errors.Is(serveErr, http.ErrServerClosed) {
+			result = ErrServing
 		}
-	case <-ctx.Done():
 		users.stop()
-		stop, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if srv.Shutdown(stop) != nil {
-			_ = srv.Close()
-		}
-		<-done
+		cancelRequests()
+		result = errors.Join(result, finishRequests(srv, users, logger))
+		return result
+	case <-ctx.Done():
 	}
-	return nil
+	stopStarted = time.Now()
+	users.stop()
+	logger.Info("shutdown", "phase", "stop-admission")
+	logger.Info("shutdown", "phase", "draining", "grace", settings.ShutdownGrace)
+	stop, cancel := context.WithTimeout(context.Background(), settings.ShutdownGrace)
+	err = srv.Shutdown(stop)
+	cancel()
+	if err != nil {
+		result = ErrShutdownDeadline
+		if !errors.Is(err, context.DeadlineExceeded) {
+			result = ErrShutdownFailed
+		}
+		logger.Warn("shutdown", "phase", "cancelling")
+	}
+	cancelRequests()
+	result = errors.Join(result, finishRequests(srv, users, logger))
+	<-done
+	return result
 }
 
 type transportLog struct{ logger *slog.Logger }

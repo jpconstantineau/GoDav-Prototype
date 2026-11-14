@@ -1,4 +1,4 @@
-//go:build !godav_test_fail_file_commit && !godav_test_pause_file_commit
+//go:build !godav_test_fail_file_commit && !godav_test_pause_file_commit && !godav_test_stuck_file_commit
 
 package sqlite
 
