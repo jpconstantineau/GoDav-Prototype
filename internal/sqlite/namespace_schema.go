@@ -78,7 +78,7 @@ func namespaceShape(ctx context.Context, conn *sql.Conn) error {
 	if conn.QueryRowContext(ctx, `SELECT count(*),coalesce(sum("table"='nodes' AND "from"='parent_id' AND "to"='id' AND on_update='NO ACTION' AND on_delete='NO ACTION'),0) FROM pragma_foreign_key_list('nodes','main')`).Scan(&count, &matching) != nil || count != 1 || matching != 1 {
 		return files.ErrUnavailable
 	}
-	if !namespaceCheck(ctx, conn, "namespace_policy", `id=1`) || !namespaceCheck(ctx, conn, "nodes", `(id='root' AND parent_id IS NULL AND name='' AND name_key='') OR (id<>'root' AND parent_id IS NOT NULL AND octet_length(name) BETWEEN 1 AND 255 AND octet_length(name_key) BETWEEN 1 AND 255)`) {
+	if !namespaceCheck(ctx, conn, "namespace_policy", `id=1`) || !namespaceCheck(ctx, conn, "nodes", namespaceRootCheck) {
 		return files.ErrUnavailable
 	}
 	return nil

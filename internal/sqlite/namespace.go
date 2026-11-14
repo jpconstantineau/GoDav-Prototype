@@ -14,6 +14,8 @@ import (
 )
 
 const rootID = "root"
+const namespaceRootCheck = `(id='root' AND parent_id IS NULL AND name='' AND name_key='') OR
+ (id<>'root' AND parent_id IS NOT NULL AND octet_length(name) BETWEEN 1 AND 255 AND octet_length(name_key) BETWEEN 1 AND 255)`
 
 // PrepareNamespace is an explicit write operation, never part of opening or
 // read-only validation. Accounts and ownership remain on the same connection.
@@ -51,8 +53,7 @@ func (s *AccountStore) PrepareNamespace(ctx context.Context) error {
  name_key TEXT NOT NULL,
  created_at INTEGER NOT NULL,
  modified_at INTEGER NOT NULL,
- CHECK((id='root' AND parent_id IS NULL AND name='' AND name_key='') OR
- (id<>'root' AND parent_id IS NOT NULL AND octet_length(name) BETWEEN 1 AND 255 AND octet_length(name_key) BETWEEN 1 AND 255)),
+ CHECK(`+namespaceRootCheck+`),
  UNIQUE(parent_id,name_key)
  ) STRICT;`)
 	if err != nil {

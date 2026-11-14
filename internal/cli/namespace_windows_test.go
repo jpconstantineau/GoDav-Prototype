@@ -145,18 +145,29 @@ func TestNamespaceServerRequiresWritablePrivateParent(t *testing.T) {
 			if err != nil {
 				t.Fatal("fixture read failed")
 			}
+			if name == "godav.yaml" {
+				for _, asset := range []string{"server.crt", "server.key"} {
+					old := "'tls/" + asset + "'"
+					if !bytes.Contains(data, []byte(old)) {
+						t.Fatal("TLS fixture setting missing")
+					}
+					data = bytes.ReplaceAll(data, []byte(old), []byte("'"+filepath.ToSlash(filepath.Join(source.dir, "tls", asset))+"'"))
+				}
+			}
 			writeRestrictedFixtureFile(t, filepath.Join(dir, name), data)
 		}
 		before := snapshotLocalState(t, dir)
 		f := source
 		f.dir = dir
 		f.config = filepath.Join(dir, "godav.yaml")
-		namespaceServerRefusal(t, bin, f)
+		if namespaceServerRefusal(t, bin, f) != "godav: server startup failed\n" {
+			t.Fatal("server did not return the fixed startup refusal")
+		}
 		assertLocalStateUnchanged(t, dir, before)
 	}
 }
 
-func namespaceServerRefusal(t *testing.T, bin string, f serverFixture) {
+func namespaceServerRefusal(t *testing.T, bin string, f serverFixture) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -170,6 +181,7 @@ func namespaceServerRefusal(t *testing.T, bin string, f serverFixture) {
 	if err == nil || ctx.Err() != nil || cmd.ProcessState.ExitCode() != 1 || out.Len() != 0 || strings.Contains(stderr.String(), "msg=ready") || strings.Contains(stderr.String(), f.password) {
 		t.Fatal("namespace startup did not fail safely before readiness")
 	}
+	return stderr.String()
 }
 
 func TestNamespaceMigrationRollsBackAndRecoversExplicitly(t *testing.T) {
@@ -425,8 +437,8 @@ func TestNamespaceConcurrentCaseCreatesStayUnique(t *testing.T) {
 	}
 }
 
-func TestNamespaceRejectsUnexpectedTriggerWithoutMutation(t *testing.T) {
-	bin := development(t)
+func assertNamespaceSchemaRefused(t *testing.T, bin, statement string) {
+	t.Helper()
 	f := newServerFixture(t, bin)
 	p := startServer(t, bin, f)
 	p.stop()
@@ -435,7 +447,7 @@ func TestNamespaceRejectsUnexpectedTriggerWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal("fixture open failed")
 	}
-	_, err = db.Exec(`CREATE TRIGGER namespace_side_effect AFTER INSERT ON nodes BEGIN UPDATE accounts SET enabled=0; END;`)
+	_, err = db.Exec(statement)
 	closeErr := db.Close()
 	if err != nil || closeErr != nil {
 		t.Fatal("fixture mutation failed")
@@ -446,6 +458,10 @@ func TestNamespaceRejectsUnexpectedTriggerWithoutMutation(t *testing.T) {
 	if code != 1 || out != "" || stderr == "" || !bytes.Equal(before, after) {
 		t.Fatal("unsafe namespace was accepted or changed")
 	}
+}
+
+func TestNamespaceRejectsUnexpectedTriggerWithoutMutation(t *testing.T) {
+	assertNamespaceSchemaRefused(t, development(t), `CREATE TRIGGER namespace_side_effect AFTER INSERT ON nodes BEGIN UPDATE accounts SET enabled=0; END;`)
 }
 
 func TestNamespaceCreatesAndListsCollection(t *testing.T) {
@@ -466,54 +482,18 @@ func TestNamespaceCreatesAndListsCollection(t *testing.T) {
 }
 
 func TestNamespaceRejectsMissingUniquenessWithoutMutation(t *testing.T) {
-	bin := development(t)
-	f := newServerFixture(t, bin)
-	p := startServer(t, bin, f)
-	p.stop()
-	path := filepath.Join(f.dir, "godav.sqlite")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal("fixture open failed")
-	}
-	_, err = db.Exec(`ALTER TABLE nodes RENAME TO old_nodes;
- CREATE TABLE nodes(id TEXT PRIMARY KEY NOT NULL,parent_id TEXT REFERENCES nodes(id),name TEXT NOT NULL,name_key TEXT NOT NULL,created_at INTEGER NOT NULL,modified_at INTEGER NOT NULL) STRICT;
+	// Preserve all other constraints, independently of production SQL constants.
+	assertNamespaceSchemaRefused(t, development(t), `ALTER TABLE nodes RENAME TO old_nodes;
+ CREATE TABLE nodes(id TEXT PRIMARY KEY NOT NULL,parent_id TEXT REFERENCES nodes(id),name TEXT NOT NULL,name_key TEXT NOT NULL,created_at INTEGER NOT NULL,modified_at INTEGER NOT NULL,
+ CHECK((id='root' AND parent_id IS NULL AND name='' AND name_key='') OR (id<>'root' AND parent_id IS NOT NULL AND octet_length(name) BETWEEN 1 AND 255 AND octet_length(name_key) BETWEEN 1 AND 255))) STRICT;
  INSERT INTO nodes SELECT * FROM old_nodes;
  DROP TABLE old_nodes;`)
-	closeErr := db.Close()
-	if err != nil || closeErr != nil {
-		t.Fatal("fixture mutation failed")
-	}
-	before, _ := os.ReadFile(path)
-	out, stderr, code := command(t, f.dir, bin, "init", "config", "--config", f.config, "--username", "DifferentUser")
-	after, _ := os.ReadFile(path)
-	if code != 1 || out != "" || stderr == "" || !bytes.Equal(before, after) {
-		t.Fatal("unconstrained namespace was accepted or changed")
-	}
 }
 
 func TestNamespaceRejectsMissingRootConstraintWithoutMutation(t *testing.T) {
-	bin := development(t)
-	f := newServerFixture(t, bin)
-	p := startServer(t, bin, f)
-	p.stop()
-	path := filepath.Join(f.dir, "godav.sqlite")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal("fixture open failed")
-	}
-	_, err = db.Exec(`ALTER TABLE nodes RENAME TO old_nodes;
+	assertNamespaceSchemaRefused(t, development(t), `ALTER TABLE nodes RENAME TO old_nodes;
  CREATE TABLE nodes(id TEXT PRIMARY KEY NOT NULL,parent_id TEXT REFERENCES nodes(id),name TEXT NOT NULL,name_key TEXT NOT NULL,created_at INTEGER NOT NULL,modified_at INTEGER NOT NULL,UNIQUE(parent_id,name_key)) STRICT;
  INSERT INTO nodes SELECT * FROM old_nodes; DROP TABLE old_nodes;`)
-	closeErr := db.Close()
-	if err != nil || closeErr != nil {
-		t.Fatal("fixture mutation failed")
-	}
-	before, _ := os.ReadFile(path)
-	out, stderr, code := command(t, f.dir, bin, "init", "config", "--config", f.config, "--username", "DifferentUser")
-	after, _ := os.ReadFile(path)
-	if code != 1 || out != "" || stderr == "" || !bytes.Equal(before, after) {
-		t.Fatal("root constraint absence was accepted or changed")
-	}
 }
 
 func TestNamespaceUnicodePolicyAndLiteralEscapes(t *testing.T) {
