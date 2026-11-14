@@ -2,7 +2,11 @@
 
 package sqlite
 
-import "github.com/jpconstantineau/GoDav-Prototype/internal/files"
+import (
+	"context"
+
+	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
+)
 
 // Synthetic build only: fail after metadata and tag updates, before commit.
-func metadataCommitFailure() error { return files.ErrUnavailable }
+func metadataCommitFailure(context.Context) error { return files.ErrUnavailable }

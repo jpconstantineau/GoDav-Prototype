@@ -118,7 +118,7 @@ func TestReleaseIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatal("release artifact missing")
 		}
-		if strings.Contains(string(artifact), "test-only settings I/O failure") || strings.Contains(string(artifact), "test-only private console I/O failure") {
+		if strings.Contains(string(artifact), "test-only settings I/O failure") || strings.Contains(string(artifact), "test-only private console I/O failure") || strings.Contains(string(artifact), "test-only metadata publication pause") {
 			t.Fatal("release contains test-only fault controls")
 		}
 		notices, err := os.ReadFile(filepath.Join(output, filepath.Dir(filepath.FromSlash(target)), "THIRD_PARTY_NOTICES.txt"))

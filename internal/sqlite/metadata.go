@@ -101,7 +101,7 @@ func (s *AccountStore) PatchMetadata(ctx context.Context, names []string, update
 			return files.Node{}, files.ErrUnavailable
 		}
 	}
-	if metadataCommitFailure() != nil {
+	if metadataCommitFailure(ctx) != nil {
 		return files.Node{}, files.ErrUnavailable
 	}
 	if tx.Commit() != nil {

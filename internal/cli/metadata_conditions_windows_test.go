@@ -435,30 +435,22 @@ func TestMetadataConcurrentPatchExpectation(t *testing.T) {
 	for _, value := range []string{"first", "second"} {
 		go func() {
 			<-start
-			deadline := time.Now().Add(5 * time.Second)
-			for {
-				body := `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:"><d:set><d:prop><z:Win32CreationTime>` + value + `</z:Win32CreationTime></d:prop></d:set></d:propertyupdate>`
-				req, _ := http.NewRequest("PROPPATCH", f.origin+"/dav/race", strings.NewReader(body))
-				req.SetBasicAuth("FixtureUser", f.password)
-				req.Header.Set("If-Match", tag)
-				resp, err := c.Do(req)
-				if err != nil {
-					results <- outcome{}
-					return
-				}
-				code := resp.StatusCode
-				payload, readErr := io.ReadAll(resp.Body)
-				if readErr != nil {
-					code = 0
-				}
-				resp.Body.Close()
-				if code == 503 && time.Now().Before(deadline) {
-					time.Sleep(10 * time.Millisecond)
-					continue
-				}
-				results <- outcome{code: code, data: payload, value: value}
+			body := `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:"><d:set><d:prop><z:Win32CreationTime>` + value + `</z:Win32CreationTime></d:prop></d:set></d:propertyupdate>`
+			req, _ := http.NewRequest("PROPPATCH", f.origin+"/dav/race", strings.NewReader(body))
+			req.SetBasicAuth("FixtureUser", f.password)
+			req.Header.Set("If-Match", tag)
+			resp, err := retryAdmission(c, req)
+			if err != nil {
+				results <- outcome{}
 				return
 			}
+			code := resp.StatusCode
+			payload, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				code = 0
+			}
+			resp.Body.Close()
+			results <- outcome{code: code, data: payload, value: value}
 		}()
 	}
 	close(start)
