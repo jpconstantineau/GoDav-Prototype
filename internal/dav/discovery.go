@@ -8,26 +8,33 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"golang.org/x/net/webdav"
 )
 
-// discovery uses the upstream DAV parser/serializer against a private synthetic
-// empty root. The filesystem never escapes this handler and mutations cannot
-// reach it. Persistent files begin in the next slice, not in this fixture root.
-func discovery() http.Handler {
-	upstream := &webdav.Handler{Prefix: "/dav/", FileSystem: webdav.NewMemFS(), LockSystem: webdav.NewMemLS()}
+// discovery reuses upstream PROPFIND over a read-only committed snapshot.
+func discovery(collections *files.Service) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Allow", "OPTIONS, PROPFIND")
-		if r.URL.Path != "/dav" && r.URL.Path != "/dav/" {
-			http.NotFound(w, r)
-			return
-		}
+		w.Header().Set("Allow", "OPTIONS, PROPFIND, MKCOL")
+		path := strings.TrimPrefix(r.URL.Path, "/dav")
+		path = strings.TrimPrefix(path, "/")
 		switch r.Method {
+		case "MKCOL":
+			makeCollection(w, r, collections, path)
+			return
 		case "OPTIONS":
+			if _, err := collections.Snapshot(r.Context(), path, false); err != nil {
+				namespaceError(w, r, err)
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			return
 		case "PROPFIND":
 		default:
+			if _, err := collections.Snapshot(r.Context(), path, false); err != nil {
+				namespaceError(w, r, err)
+				return
+			}
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -60,9 +67,15 @@ func discovery() http.Handler {
 			http.Error(w, "Bad Request", 400)
 			return
 		}
+		snapshot, err := collections.Snapshot(r.Context(), path, depths[0] == "1")
+		if err != nil {
+			namespaceError(w, r, err)
+			return
+		}
+		upstream := &webdav.Handler{Prefix: "/dav/", FileSystem: snapshotFS{snapshot}, LockSystem: webdav.NewMemLS()}
 		clone := r.Clone(r.Context())
 		clone.Body = io.NopCloser(bytes.NewReader(body))
-		clone.URL.Path = "/dav/"
+		clone.URL.Path = "/dav/" + snapshot.Path
 		clone.URL.RawPath = ""
 		response := &discoveryResponse{headers: make(http.Header)}
 		upstream.ServeHTTP(response, clone)
