@@ -9,7 +9,7 @@ import (
 
 // validateSchema checks structural v1 invariants without executing stored SQL.
 // Limits bound metadata materialized in Go, including the CREATE statement.
-func validateSchema(ctx context.Context, db *sql.DB) error {
+func validateSchema(ctx context.Context, db *sql.Conn) error {
 	invalid := errors.New("invalid account schema")
 	// Use the actual PRAGMA: a bare pragma_table_list name can resolve to an
 	// ordinary stored table and let untrusted state spoof its own metadata.

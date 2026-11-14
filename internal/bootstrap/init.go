@@ -12,6 +12,8 @@ import (
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
 	settings "github.com/jpconstantineau/GoDav-Prototype/internal/config"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/localfs"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/localstate"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/sqlite"
 )
 
@@ -31,7 +33,7 @@ func Init(config, username string, openConsole func() (*os.File, error)) (bool, 
 		return false, errors.New("invalid settings path")
 	}
 	dbPath := filepath.Join(filepath.Dir(config), "godav.sqlite")
-	if err := checkPath(config, true); err != nil {
+	if err := localfs.CheckPath(config, true); err != nil {
 		return false, errors.New("unsafe settings path")
 	}
 	_, stateErr := os.Lstat(config)
@@ -39,89 +41,51 @@ func Init(config, username string, openConsole func() (*os.File, error)) (bool, 
 	if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
 		return false, errors.New("settings are inaccessible")
 	}
-	var current settings.Settings
 	if existing {
-		if err := checkPrivateFile(config); err != nil {
-			return false, errors.New("settings are missing, unsafe or inaccessible")
-		}
-		current, err = settings.Load(config)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		session, err := localstate.OpenExisting(ctx, config, localstate.ReadOnly)
 		if err != nil {
-			return false, errors.New("invalid settings")
-		}
-		dbPath = current.DatabasePath
-	}
-	var console *os.File
-	if !existing {
-		for _, suffix := range []string{"", ".lock", "-wal", "-journal", "-shm"} {
-			if strings.EqualFold(config, dbPath+suffix) {
-				return false, errors.New("settings and storage paths conflict")
-			}
-		}
-		if err := requireAbsent(dbPath); err != nil {
 			return false, err
 		}
-		console, err = openConsole()
-		if err != nil {
-			return false, ErrConsole
-		}
-		defer console.Close()
+		return false, session.Close()
 	}
-	settingsPin, err := pinPrivateDirectory(filepath.Dir(config), !existing)
+	for _, suffix := range []string{"", ".lock", "-wal", "-journal", "-shm"} {
+		if strings.EqualFold(config, dbPath+suffix) {
+			return false, errors.New("settings and storage paths conflict")
+		}
+	}
+	if err := requireAbsent(dbPath); err != nil {
+		return false, err
+	}
+	console, err := openConsole()
+	if err != nil {
+		return false, ErrConsole
+	}
+	defer console.Close()
+	settingsPin, err := localfs.PinPrivateDirectory(filepath.Dir(config), true)
 	if err != nil {
 		return false, errors.New("settings directory must be private")
 	}
 	defer settingsPin.Close()
-	if err := checkPrivateDirectory(filepath.Dir(dbPath)); err != nil {
+	if err := localfs.CheckPrivateDirectory(filepath.Dir(dbPath)); err != nil {
 		return false, errors.New("database directory must be private")
 	}
-	if err := checkPath(dbPath, true); err != nil {
+	if err := localfs.CheckPath(dbPath, true); err != nil {
 		return false, errors.New("unsafe database path")
 	}
 	certPath, keyPath := filepath.Join(filepath.Dir(config), "tls", "server.crt"), filepath.Join(filepath.Dir(config), "tls", "server.key")
-	if existing {
-		certPath, keyPath = current.CertFile, current.KeyFile
-	}
-	if checkPath(certPath, true) != nil || checkPath(keyPath, true) != nil {
+	if localfs.CheckPath(certPath, true) != nil || localfs.CheckPath(keyPath, true) != nil {
 		return false, errors.New("unsafe TLS path")
 	}
-	if existing {
-		if err := checkPrivateFile(dbPath); err != nil {
-			return false, errors.New("database is missing, unsafe or inaccessible")
-		}
-		if err := requireNoSidecars(dbPath); err != nil {
-			return false, err
-		}
-	} else {
-		if err := requireAbsent(dbPath); err != nil {
-			return false, err
-		}
+	if err := requireAbsent(dbPath); err != nil {
+		return false, err
 	}
-	lock, err := acquireOwnership(dbPath+".lock", !existing)
+	lock, err := localfs.AcquireOwnership(dbPath+".lock", true)
 	if err != nil {
 		return false, errors.New("database is in use or ownership is unsafe")
 	}
 	defer lock.Close()
-	if existing {
-		if err := checkPrivateFile(config); err != nil {
-			return false, errors.New("settings are missing, unsafe or inaccessible")
-		}
-		rechecked, err := settings.Load(config)
-		if err != nil || rechecked != current {
-			return false, errors.New("settings changed during initialization")
-		}
-		if err := checkPrivateFile(dbPath); err != nil {
-			return false, errors.New("database is missing, unsafe or inaccessible")
-		}
-		if err := requireNoSidecars(dbPath); err != nil {
-			return false, err
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := sqlite.Validate(ctx, dbPath); err != nil {
-			return false, errors.New("invalid or unsupported database/account state")
-		}
-		return false, nil
-	}
 	if _, err := os.Lstat(config); !errors.Is(err, os.ErrNotExist) {
 		return false, errors.New("settings changed during initialization")
 	}
@@ -166,15 +130,6 @@ func requireAbsent(path string) error {
 	for _, suffix := range []string{"", "-wal", "-journal", "-shm"} {
 		if _, err := os.Lstat(path + suffix); !errors.Is(err, os.ErrNotExist) {
 			return errors.New("database or partial state exists; retain database and reconstruct settings")
-		}
-	}
-	return nil
-}
-
-func requireNoSidecars(path string) error {
-	for _, suffix := range []string{"-wal", "-journal", "-shm"} {
-		if _, err := os.Lstat(path + suffix); !errors.Is(err, os.ErrNotExist) {
-			return errors.New("partial database state requires explicit recovery")
 		}
 	}
 	return nil

@@ -35,9 +35,8 @@ func open(path, mode string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Validate opens only the selected existing database, read-only. It does not
-// migrate, repair, reseed or recover partial state by performing writes.
-func Validate(ctx context.Context, path string) error {
+// validateHeader rejects persisted WAL before any SQLite connection can create sidecars.
+func validateHeader(path string) error {
 	// Read-only SQLite connections can create WAL/SHM files for a database
 	// whose persistent journal mode is WAL, even after a clean close. Check
 	// the fixed header before any SQLite open; accept only rollback format.
@@ -55,16 +54,15 @@ func Validate(ctx context.Context, path string) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	db, err := open(path, "ro")
-	if err != nil {
-		return err
-	}
-	defer db.Close()
+	return nil
+}
+
+func validateAccounts(ctx context.Context, db *sql.Conn) error {
 	var version, application int
-	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if err = db.QueryRowContext(ctx, "PRAGMA application_id").Scan(&application); err != nil {
+	if err := db.QueryRowContext(ctx, "PRAGMA application_id").Scan(&application); err != nil {
 		return err
 	}
 	if version != 1 || application != 1195655510 {
@@ -74,7 +72,7 @@ func Validate(ctx context.Context, path string) error {
 		return err
 	}
 	var integrity string
-	if err = db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&integrity); err != nil || integrity != "ok" {
+	if err := db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&integrity); err != nil || integrity != "ok" {
 		return errors.New("invalid database integrity")
 	}
 	// Guard encoded field sizes in SQLite before materializing them in Go.
