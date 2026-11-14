@@ -767,3 +767,81 @@ func TestRunServerBoundsSlowDiscoveryAndNeverFetchesDestination(t *testing.T) {
 		t.Fatal("cross-origin destination attempted a network fetch")
 	}
 }
+
+func TestRunServerPreservesDiscoveryXMLNamespacesAndBound(t *testing.T) {
+	bin := development(t)
+	f := newServerFixture(t, bin)
+	p := startServer(t, bin, f)
+	defer p.stop()
+	client := fixtureClient(f)
+	defer client.CloseIdleConnections()
+	for _, tc := range []struct {
+		name, namespace string
+		count           int
+	}{{"custom-property", "urn:fixture", 1}, {"bounded-expanded-namespaces", "urn:" + strings.Repeat("a", 3900), 200}} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `<d:propfind xmlns:d="DAV:" xmlns:p="` + tc.namespace + `"><d:prop><d:supportedlock/>` + strings.Repeat(`<p:missing/>`, tc.count) + `</d:prop></d:propfind>`
+			req, _ := http.NewRequest("PROPFIND", f.origin+"/dav/", strings.NewReader(body))
+			req.SetBasicAuth("FixtureUser", f.password)
+			req.Header.Set("Depth", "0")
+			response, err := client.Do(req)
+			if err != nil {
+				t.Fatal("namespaced discovery request failed")
+			}
+			data, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
+			response.Body.Close()
+			if err != nil || response.StatusCode != 207 || len(data) > 1<<20 {
+				t.Fatal("discovery response exceeded its bound or failed")
+			}
+			decoder := xml.NewDecoder(bytes.NewReader(data))
+			for {
+				token, err := decoder.Token()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatal("discovery XML is malformed")
+				}
+				if start, ok := token.(xml.StartElement); ok {
+					seen := map[xml.Name]bool{}
+					for _, attr := range start.Attr {
+						if seen[attr.Name] {
+							t.Fatal("discovery XML has duplicate attributes")
+						}
+						seen[attr.Name] = true
+					}
+					if start.Name == (xml.Name{Space: "DAV:", Local: "lockentry"}) {
+						t.Fatal("unsupported write lock advertised")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestRunServerRejectsBracketedDNSAuthorities(t *testing.T) {
+	bin := development(t)
+	f := newServerFixture(t, bin)
+	p := startServer(t, bin, f)
+	defer p.stop()
+	u, _ := url.Parse(f.origin)
+	client := fixtureClient(f)
+	defer client.CloseIdleConnections()
+	for _, tc := range []struct {
+		authority string
+		status    int
+	}{{"[localhost]:" + u.Port(), 400}, {"[LOCALHOST]:" + u.Port(), 400}, {"LOCALHOST:0" + u.Port(), 200}} {
+		req, _ := http.NewRequest("OPTIONS", f.origin+"/dav/", nil)
+		req.Host = tc.authority
+		req.SetBasicAuth("FixtureUser", f.password)
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal("authority fixture request failed")
+		}
+		io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+		if response.StatusCode != tc.status {
+			t.Fatalf("authority status got %d want %d", response.StatusCode, tc.status)
+		}
+	}
+}

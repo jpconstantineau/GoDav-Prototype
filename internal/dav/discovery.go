@@ -115,7 +115,7 @@ func (w *discoveryResponse) Write(p []byte) (int, error) {
 func withoutWriteLocks(input []byte) ([]byte, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(input))
 	var output bytes.Buffer
-	encoder := xml.NewEncoder(&output)
+	copied := int64(0)
 	for {
 		token, err := decoder.Token()
 		if err == io.EOF {
@@ -124,22 +124,34 @@ func withoutWriteLocks(input []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if start, ok := token.(xml.StartElement); ok && start.Name == (xml.Name{Space: "DAV:", Local: "supportedlock"}) {
-			if err := encoder.EncodeToken(start); err != nil {
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name != (xml.Name{Space: "DAV:", Local: "supportedlock"}) {
+			continue
+		}
+		contentStart := decoder.InputOffset()
+		depth := 1
+		var endStart int64
+		for depth > 0 {
+			endStart = decoder.InputOffset()
+			token, err = decoder.Token()
+			if err != nil {
 				return nil, err
 			}
-			if err := decoder.Skip(); err != nil {
-				return nil, err
+			switch token.(type) {
+			case xml.StartElement:
+				depth++
+			case xml.EndElement:
+				depth--
 			}
-			token = start.End()
 		}
-		if err := encoder.EncodeToken(token); err != nil {
-			return nil, err
-		}
+		// Preserve upstream namespace spelling and attributes exactly. Re-encoding
+		// expanded tokens can duplicate xmlns attributes and expand the response.
+		// Only remove bytes: the result cannot exceed the bounded upstream buffer.
+		output.Write(input[copied:contentStart])
+		output.Write(input[endStart:decoder.InputOffset()])
+		copied = decoder.InputOffset()
 	}
-	if err := encoder.Flush(); err != nil {
-		return nil, err
-	}
+	output.Write(input[copied:])
 	return output.Bytes(), nil
 }
 
