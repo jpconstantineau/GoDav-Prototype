@@ -3,6 +3,55 @@
 Date: 2026-11-14. Native host: Zen, Windows amd64. Initial worktree branch:
 codex/godav-02-bootstrap, based on reviewed integration bf6e765.
 
+## Persisted WAL pre-open correction
+
+Correction worktree and branch: `ticket-02-wal-guard`, based on reviewed candidate
+`fdab39ee92cd77d3f2a4b5ffdbfbd8d5866f82b1`. Integration `bf6e765` remains an
+ancestor. No merge, push, tracker mutation or original-checkout edit occurred.
+
+The latest review identified that SQLite `mode=ro` can create WAL/SHM files for
+a cleanly closed WAL database without sidecars. A real SQLite fixture initialized
+through the CLI was switched to WAL, checkpointed and closed using fixture-only
+PRAGMAs. Its complete closed file set was then copied into new inheriting and
+non-inheriting private directories with explicit private file/lock creation
+DACLs. Both uncorrected CLI runs failed refusal and created additional state.
+The corrected runs refuse and preserve every file's bytes, identity, owner/DACL,
+the parent permissions and directory entry set. No existing ACL or token default
+was changed; this is not an unrelated-user access exploit or hostile-swap test.
+
+Production validation now reads a bounded 100-byte SQLite header before any
+SQLite open, requiring the signature and rollback read/write format bytes 1/1.
+It does not change journal mode, repair data or ignore WAL through immutable mode.
+Existing sidecar checks remain. Valid rollback no-op in a non-inheriting private
+directory, orphan sidecars and corrupt/missing/future-schema refusals still pass.
+Both unused `syncParent` hooks were removed; the unchanged directory-fsync and
+power-loss limitation now sits beside `publishExclusive`.
+
+Fresh evidence uses isolated Go 1.27.4, unchanged audited module pins and unique
+`GoDav-Project-Tools/logs/slice02-walguard-*-20261114.log` files. The expected
+`wal-red` failure is retained; `wal-green` passed in 12.573 seconds. Windows/Linux
+vet, module verification, tidy-diff and all four application/test vulnerability
+scans passed. Govulncheck v1.9.0 reported no known vulnerabilities, covering 12
+Windows modules and 11 Linux modules including the application.
+
+Full `go test ./... -count=1 -v -timeout=5m` passed, CLI 133.706 seconds. The
+bounded GCC 14.2.0 `CGO_ENABLED=1 go test -race ./internal/cli -run
+'^TestInitConfig' -count=1 -v -timeout=5m` passed in 86.629 seconds. This instruments
+only the harness/in-process fixtures, not the CGO-free CLI subprocesses.
+
+The final focused/release run passed in 16.388 seconds. Both target releases
+exclude test fault tags/markers and retain exact companion notices. Windows
+version executed; Linux artifacts were compiled and inspected only. No new
+release artifacts are published by this pass; integration will rebuild them.
+
+`slice02-walguard-evidence-sha256-20261114.log` identifies the correction commit
+and hashes all 16 new evidence logs, including the expected red failure. Prior
+logs/manifests were not overwritten. All prior limits remain: no Linux runtime,
+power-loss/interrupted-write or hostile-swap test; no retry of denied
+hardlink/junction creation; no real account, dependency, recovery command,
+automatic bootstrap, listener, trust, service or install changes. Fixed-commit
+independent review remains required before integration.
+
 ## YAML privacy and shared Windows component corrections
 
 Correction worktree: `ticket-02-yaml-privacy`, branch

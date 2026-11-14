@@ -285,6 +285,10 @@ func acquireOwnership(path string, requireFileInheritance bool) (io.Closer, erro
 	return &ownership{file: h, parents: parents}, nil
 }
 
+// The caller flushes file contents before publishExclusive requests WRITE_THROUGH.
+// Windows documents no ordinary unprivileged directory-fsync equivalent here;
+// this supports normal restart persistence, not proven power-loss durability
+// of directory entries.
 func publishExclusive(temp, path string) error {
 	if err := checkPath(temp, false); err != nil {
 		return err
@@ -309,10 +313,3 @@ func publishExclusive(temp, path string) error {
 	}
 	return nil
 }
-
-// syncParent intentionally performs no directory flush on Windows. The caller
-// flushes file contents before publishExclusive, which requests WRITE_THROUGH.
-// Windows documents no ordinary unprivileged directory-fsync equivalent here;
-// this supports normal restart persistence, NOT proven power-loss durability
-// of directory entries. Do not turn this no-op into a stronger durability claim.
-func syncParent(path string) error { return nil }

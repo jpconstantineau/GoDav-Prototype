@@ -120,6 +120,15 @@ state, never a fresh installation. Refuse without deleting/adopting sidecars or
 opening a replacement database. Existing databases and their sidecars must be
 validated and protected under the same ownership/path checks.
 
+Before SQLite opens existing state, read only its fixed 100-byte file header.
+Require the SQLite 3 signature and rollback read/write format bytes (both 1).
+Reject persisted WAL (format 2), unknown formats and truncated headers, even
+when no sidecars remain after a clean close. A read-only SQLite connection can
+still create WAL/SHM files; validation must not create these or switch journal
+mode, repair state or use immutable mode to ignore pending WAL. The sidecar
+checks remain required. See SQLite's [file format](https://www.sqlite.org/fileformat.html#file_format_version_numbers)
+and [read-only WAL behavior](https://www.sqlite.org/wal.html#read_only_databases).
+
 Version 1 is the initial supported schema. Do not invent legacy migrations or
 adopt an unversioned/partial SQLite file. Future unsupported schema versions fail
 closed; no fallback database path and no reseeding of existing state.

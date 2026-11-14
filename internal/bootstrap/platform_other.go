@@ -21,4 +21,3 @@ func acquireOwnership(path string, requireFileInheritance bool) (io.Closer, erro
 	return nil, errUnsupportedPlatform
 }
 func publishExclusive(temp, path string) error { return errUnsupportedPlatform }
-func syncParent(path string) error             { return errUnsupportedPlatform }

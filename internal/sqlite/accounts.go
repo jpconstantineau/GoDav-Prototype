@@ -6,7 +6,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -36,6 +38,23 @@ func open(path, mode string) (*sql.DB, error) {
 // Validate opens only the selected existing database, read-only. It does not
 // migrate, repair, reseed or recover partial state by performing writes.
 func Validate(ctx context.Context, path string) error {
+	// Read-only SQLite connections can create WAL/SHM files for a database
+	// whose persistent journal mode is WAL, even after a clean close. Check
+	// the fixed header before any SQLite open; accept only rollback format.
+	// https://www.sqlite.org/fileformat.html#file_format_version_numbers
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	var header [100]byte
+	_, readErr := io.ReadFull(f, header[:])
+	closeErr := f.Close()
+	if readErr != nil || string(header[:16]) != "SQLite format 3\x00" || header[18] != 1 || header[19] != 1 {
+		return errors.New("unsupported database file format")
+	}
+	if closeErr != nil {
+		return closeErr
+	}
 	db, err := open(path, "ro")
 	if err != nil {
 		return err
