@@ -15,6 +15,12 @@ var sourceState = "unknown"
 const help = "Usage: godav <command>\n\nCommands:\n  init config [--config <path>] --username <name>  Initialize privately (default: godav.yaml)\n  run server --config <path>  Serve an initialized HTTPS share\n  add user [--config <path>] --username <name>  Add an account offline\n  reset password [--config <path>] --username <name>  Reset an account offline\n  version  Show build identity\n  help     Show this help\n"
 
 func Run(args []string, stdout, stderr io.Writer) int {
+	if len(args) >= 2 && args[1] == "service" {
+		switch args[0] {
+		case "install", "check", "start", "stop", "uninstall":
+			return serviceCommand(args[0], args[2:], stdout, stderr)
+		}
+	}
 	if len(args) >= 2 && args[0] == "run" && args[1] == "server" {
 		return runServer(args[2:], stdout, stderr)
 	}
