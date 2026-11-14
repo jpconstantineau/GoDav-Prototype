@@ -220,7 +220,7 @@ func TestRunServerAuthenticatesStoredAccount(t *testing.T) {
 			if response.StatusCode != tc.status {
 				t.Fatalf("unexpected auth status %d", response.StatusCode)
 			}
-			if tc.status == 200 && (response.Header.Get("Allow") != "OPTIONS, PROPFIND" || response.Header.Get("DAV") != "") {
+			if tc.status == 200 && (response.Header.Get("Allow") != "OPTIONS, PROPFIND, MKCOL" || response.Header.Get("DAV") != "") {
 				t.Fatal("partial discovery advertises unsupported capability")
 			}
 			if tc.status == 401 && response.Header.Get("WWW-Authenticate") != `Basic realm="GoDav"` {
@@ -556,7 +556,6 @@ func TestRunServerRawTargetsTLSAndSafeLogs(t *testing.T) {
 func TestRunServerRetainsOwnershipAndCredentialsAcrossRestart(t *testing.T) {
 	bin := development(t)
 	f := newServerFixture(t, bin)
-	beforeDB, _ := os.ReadFile(filepath.Join(f.dir, "godav.sqlite"))
 	beforeConfig, _ := os.ReadFile(f.config)
 	p := startServer(t, bin, f)
 	out, stderr, code := command(t, t.TempDir(), bin, "init", "config", "--config", f.config, "--username", "DifferentUser")
@@ -572,6 +571,9 @@ func TestRunServerRetainsOwnershipAndCredentialsAcrossRestart(t *testing.T) {
 		t.Fatal("account lookup blocked on the retained connection")
 	}
 	p.stop()
+	// The first successful start explicitly upgrades v1. Later opens and
+	// discovery must preserve the resulting v2 bytes and existing credentials.
+	beforeDB, _ := os.ReadFile(filepath.Join(f.dir, "godav.sqlite"))
 	p = startServer(t, bin, f)
 	client = fixtureClient(f)
 	response = davRequest(t, client, f, "OPTIONS", "/dav/", true)

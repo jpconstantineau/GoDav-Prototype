@@ -10,18 +10,19 @@ import (
 	"time"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 )
 
 type AccountLookup interface {
 	LookupEnabled(context.Context, string) (auth.Account, bool, error)
 }
 
-func Handler(accounts AccountLookup, origin string) http.Handler {
+func Handler(accounts AccountLookup, collections *files.Service, origin string) http.Handler {
 	u, _ := url.Parse(origin)
 	expected, _ := parseAuthority(u.Host)
 	slots := make(chan struct{}, 4)
 	mux := http.NewServeMux()
-	root := discovery()
+	root := discovery(collections)
 	mux.Handle("/dav", root)
 	mux.Handle("/dav/", root)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

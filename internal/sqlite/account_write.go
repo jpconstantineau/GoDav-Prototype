@@ -18,6 +18,10 @@ func (s *AccountStore) AddAccount(ctx context.Context, account auth.Account) err
 	if !s.writable || s.conn == nil || account.Validate() != nil {
 		return failed
 	}
+	if s.acquire(ctx) != nil {
+		return failed
+	}
+	defer s.release()
 	tx, err := s.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return failed
@@ -48,6 +52,10 @@ func (s *AccountStore) ResetPassword(ctx context.Context, username, verifier str
 	if !s.writable || s.conn == nil || !auth.ValidUsername(username) {
 		return failed
 	}
+	if s.acquire(ctx) != nil {
+		return failed
+	}
+	defer s.release()
 	tx, err := s.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return failed

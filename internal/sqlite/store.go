@@ -10,9 +10,10 @@ import (
 // It exposes no raw SQL, pool or transaction. Callers must drain users before
 // Close; feature-specific operations belong in separate files in this package.
 type AccountStore struct {
-	db       *sql.DB
-	conn     *sql.Conn
-	writable bool
+	db        *sql.DB
+	conn      *sql.Conn
+	writable  bool
+	operation chan struct{}
 }
 
 // OpenExistingReadOnly requires private path checks and exclusive ownership
@@ -40,7 +41,7 @@ func openExisting(ctx context.Context, path string, writable bool) (*AccountStor
 	if err != nil {
 		return nil, invalid
 	}
-	s := &AccountStore{db: db, writable: writable}
+	s := &AccountStore{db: db, writable: writable, operation: make(chan struct{}, 1)}
 	opened := false
 	defer func() {
 		if !opened {

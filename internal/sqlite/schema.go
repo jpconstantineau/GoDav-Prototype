@@ -120,6 +120,7 @@ FROM main.sqlite_schema WHERE type='table' AND name='accounts' COLLATE NOCASE`).
 type schemaToken struct {
 	text       string
 	identifier bool
+	literal    bool
 }
 
 // schemaTokens preserves the distinction between quoted identifiers, SQL
@@ -175,7 +176,7 @@ func schemaTokens(s string) ([]schemaToken, bool) {
 				return nil, false
 			}
 			if c == '\'' {
-				out = append(out, schemaToken{text: "<string>"})
+				out = append(out, schemaToken{text: value.String(), literal: true})
 			} else {
 				out = append(out, schemaToken{text: strings.ToLower(value.String()), identifier: true})
 			}
@@ -193,7 +194,7 @@ func schemaTokens(s string) ([]schemaToken, bool) {
 	return out, true
 }
 
-func tokenIs(t schemaToken, text string) bool { return !t.identifier && t.text == text }
+func tokenIs(t schemaToken, text string) bool { return !t.identifier && !t.literal && t.text == text }
 
 func closingParen(t []schemaToken, start int) int {
 	depth := 0
@@ -242,7 +243,7 @@ func enabledInCheck(t []schemaToken) bool {
 		return false
 	}
 	lhs := stripSchemaParens(t[:in])
-	if len(lhs) != 1 || lhs[0].text != "enabled" {
+	if len(lhs) != 1 || lhs[0].literal || lhs[0].text != "enabled" {
 		return false
 	}
 	rhs := t[in+1:]

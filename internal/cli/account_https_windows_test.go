@@ -126,8 +126,13 @@ func TestAccountAdministrationAcrossHTTPSRestart(t *testing.T) {
 		t.Fatal("adding an account changed or reused existing identity")
 	}
 
-	beforeServing := accountStateSnapshot(t, f)
 	p := startServer(t, bin, f)
+	// The first explicit server start prepares v2 collections. Establish the
+	// unchanged-state baseline only after that separate, intentional migration.
+	p.stop()
+	assertAccountServerLogs(t, p, [2]string{"FixtureUser", f.password}, [2]string{"Added.User", addedPassword})
+	beforeServing := accountStateSnapshot(t, f)
+	p = startServer(t, bin, f)
 	client := fixtureClient(f)
 	defer client.CloseIdleConnections()
 	assertAccountHTTPS(t, client, f, "FixtureUser", f.password, http.StatusOK)

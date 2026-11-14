@@ -13,6 +13,10 @@ import (
 // validated schema/accounts. It never reopens the pool or performs writes.
 func (s *AccountStore) LookupEnabled(ctx context.Context, name string) (auth.Account, bool, error) {
 	var a auth.Account
+	if err := s.acquire(ctx); err != nil {
+		return a, false, err
+	}
+	defer s.release()
 	if !auth.ValidUsername(name) {
 		return a, false, nil
 	}
