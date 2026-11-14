@@ -65,3 +65,11 @@ It sleeps three seconds without observing cancellation and always fails before
 commit. Release builds contain neither this control nor its synchronization text.
 The tested cleanup-delay result is failure; no universal hard-exit promise is made.
 
+
+Store-gate slog events report only acquisition duration and fixed acquired,
+timeout or cancelled outcomes. This gate includes reads and authentication:
+these are not claimed as ready-writer-only metrics or transaction duration.
+The existing acquisition policy and two-second timeout are unchanged. Request
+completion observes the actual admitted child context before its normal cancel,
+so the application deadline is distinguishable from a completed response.
+

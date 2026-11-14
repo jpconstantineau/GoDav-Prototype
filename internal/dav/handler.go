@@ -11,6 +11,7 @@ import (
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/requestlog"
 )
 
 type AccountLookup interface {
@@ -108,11 +109,11 @@ func (w *statusWriter) Write(p []byte) (int, error) {
 }
 func (w *statusWriter) code() int { return w.status }
 func (w *statusWriter) outcome(ctx context.Context) string {
+	if requestlog.Cancelled(ctx) || ctx.Err() != nil {
+		return "cancelled"
+	}
 	if w.writeFailed {
 		return "write-failed"
-	}
-	if ctx.Err() != nil {
-		return "cancelled"
 	}
 	if w.status == 0 {
 		return "no-response"
@@ -126,6 +127,7 @@ func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 func Trace(logger *slog.Logger, next http.Handler) http.Handler {
 	var ids atomic.Uint64
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(requestlog.Begin(r.Context(), logger))
 		start := time.Now()
 		id := ids.Add(1)
 		record := &statusWriter{ResponseWriter: w}

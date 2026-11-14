@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/requestlog"
 	"io"
 	"log/slog"
 	"net/http"
@@ -53,6 +54,7 @@ func (g *requestUsers) guard(next http.Handler) http.Handler {
 		defer func() { g.mu.Lock(); g.active--; g.mu.Unlock(); g.owners.Done() }()
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
+		defer requestlog.Complete(ctx)
 		r = r.WithContext(ctx)
 		if upload {
 			var once sync.Once

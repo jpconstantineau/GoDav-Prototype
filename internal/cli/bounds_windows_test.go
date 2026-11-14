@@ -144,9 +144,12 @@ func TestBoundsReceivingUploadsLeaveIndependentCapacity(t *testing.T) {
 	second()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		status, _, _ = fileRequest(t, client, f, "PUT", "/dav/after", bytes.NewReader([]byte("after")), nil)
+		status, retryHeaders, _ := fileRequest(t, client, f, "PUT", "/dav/after", bytes.NewReader([]byte("after")), nil)
 		if status == 201 {
 			break
+		}
+		if status != 503 || !admissionRefusal(retryHeaders) {
+			t.Fatal("non-admission failure cannot be retried")
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("upload slots were not released")
@@ -336,8 +339,9 @@ func TestBoundsAuthenticationWaitDoesNotQueue(t *testing.T) {
 	}()
 	awaitLifecycle(t, p.logs.String, "test-only file publication pause")
 	type result struct {
-		status   int
-		duration time.Duration
+		status    int
+		duration  time.Duration
+		rejection string
 	}
 	results := make(chan result, 3)
 	start := make(chan struct{})
@@ -353,7 +357,7 @@ func TestBoundsAuthenticationWaitDoesNotQueue(t *testing.T) {
 				return
 			}
 			resp.Body.Close()
-			results <- result{resp.StatusCode, time.Since(began)}
+			results <- result{resp.StatusCode, time.Since(began), resp.Header.Get("GoDav-Rejection")}
 		}()
 	}
 	close(start)
@@ -364,13 +368,22 @@ func TestBoundsAuthenticationWaitDoesNotQueue(t *testing.T) {
 			t.Fatalf("auth contention status %d", r.status)
 		}
 		if r.duration < time.Second {
+			if r.rejection != "authentication" {
+				t.Fatal("immediate refusal lacks exact admission category")
+			}
 			immediate++
 		} else if r.duration >= 1500*time.Millisecond && r.duration < 3500*time.Millisecond {
+			if r.rejection != "" {
+				t.Fatal("operation timeout incorrectly authorizes retry")
+			}
 			waited++
 		}
 	}
 	if immediate != 1 || waited != 2 {
 		t.Fatalf("auth admission got %d immediate and %d bounded waits", immediate, waited)
+	}
+	if !strings.Contains(p.logs.String(), "msg=store-gate result=timeout") || !strings.Contains(p.logs.String(), "wait=") {
+		t.Fatal("bounded acquisition lacks safe wait diagnostics")
 	}
 	if <-publication != 500 {
 		t.Fatal("publication fault outcome incorrect")
@@ -661,5 +674,36 @@ func TestBoundsDelayedCleanupRetainsDatabaseOwnership(t *testing.T) {
 	status, _, _ = fileRequest(t, client, f, "PUT", "/dav/recovered", strings.NewReader("ok"), nil)
 	if status != 201 {
 		t.Fatal("database was not released coherently after delayed owner")
+	}
+}
+
+func TestBoundsApplicationDeadlineIsTraced(t *testing.T) {
+	bin := development(t)
+	paused := faultBuild(t, "godav_test_pause_file_commit")
+	f := newServerFixture(t, bin)
+	p := startServer(t, paused, f)
+	defer p.stop()
+	client := fixtureClient(f)
+	client.Timeout = 16 * time.Second
+	defer client.CloseIdleConnections()
+	body, done := finishingUpload(t, client, f, "/dav/deadline")
+	defer body.CloseWithError(io.ErrClosedPipe)
+	time.Sleep(8 * time.Second)
+	if body.Close() != nil {
+		t.Fatal("staged deadline fixture could not finish")
+	}
+	awaitLifecycle(t, p.logs.String, "test-only file publication pause")
+	select {
+	case status := <-done:
+		if status >= 200 && status < 300 {
+			t.Fatal("deadline returned success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("application deadline did not stop transaction")
+	}
+	awaitLifecycle(t, p.logs.String, "outcome=cancelled")
+	status, _, _ := fileRequest(t, client, f, "HEAD", "/dav/deadline", nil, nil)
+	if status != 404 {
+		t.Fatal("application deadline published content")
 	}
 }
