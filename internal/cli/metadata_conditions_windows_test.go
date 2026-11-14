@@ -634,3 +634,18 @@ func TestMetadataMigrationFailureRollsBackV3(t *testing.T) {
 		t.Fatal("migration recovery changed bytes/tag")
 	}
 }
+
+func TestMetadataXMLDeclarations(t *testing.T) {
+	f, c, _ := liveFiles(t, 1024)
+	body := `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:"><d:remove><d:prop><z:Win32CreationTime/></d:prop></d:remove></d:propertyupdate>`
+	for _, prefix := range []string{`<?xml version="1.0"?><?xml version="1.0"?>`, ` <?xml version="1.0"?>`, `<?xml?>`, `<?xml version=1.0?>`} {
+		code, _, _ := fileRequest(t, c, f, "PROPPATCH", "/dav/", strings.NewReader(prefix+body), nil)
+		if code != 400 {
+			t.Fatalf("invalid XML declaration got %d", code)
+		}
+	}
+	code, _, _ := fileRequest(t, c, f, "PROPPATCH", "/dav/", strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?>`+body), nil)
+	if code != 207 {
+		t.Fatal("valid declaration rejected")
+	}
+}

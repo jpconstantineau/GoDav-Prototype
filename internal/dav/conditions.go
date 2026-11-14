@@ -128,7 +128,7 @@ func normalizedReadRequest(r *http.Request) (*http.Request, error) {
 }
 func permitsRange(r *http.Request) bool {
 	values := r.Header.Values("If-Range")
-	if len(values) == 0 {
+	if len(values) == 0 || len(values) == 1 && values[0] == "" {
 		return true
 	}
 	if len(values) != 1 {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,6 +18,10 @@ import (
 )
 
 const windowsNamespace = "urn:schemas-microsoft-com:"
+
+// encoding/xml accepts declaration-like processing instructions with no version.
+// Restrict the one allowed declaration to XML 1.0's complete UTF-8 grammar.
+var xmlDeclaration = regexp.MustCompile(`^[ \t\r\n]*version[ \t\r\n]*=[ \t\r\n]*("1\.0"|'1\.0')([ \t\r\n]+encoding[ \t\r\n]*=[ \t\r\n]*("(?i:utf-8)"|'(?i:utf-8)'))?([ \t\r\n]+standalone[ \t\r\n]*=[ \t\r\n]*("(yes|no)"|'(yes|no)'))?[ \t\r\n]*$`)
 
 // Snapshot values are detached from persistence; generic upstream writes stay disabled.
 func (f *collectionFile) DeadProps() (map[xml.Name]webdav.Property, error) {
@@ -78,7 +83,7 @@ func parsePropertyPatch(body []byte) ([]propertyChange, int) {
 		case xml.Directive:
 			return nil, 400
 		case xml.ProcInst:
-			if t.Target != "xml" || roots != 0 || seenDeclaration || !bytes.HasPrefix(body, []byte("<?xml")) {
+			if t.Target != "xml" || roots != 0 || seenDeclaration || !bytes.HasPrefix(body, []byte("<?xml")) || !xmlDeclaration.Match(t.Inst) {
 				return nil, 400
 			}
 			seenDeclaration = true
