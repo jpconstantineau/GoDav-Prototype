@@ -73,12 +73,12 @@ func namespaceMetadata(t *testing.T, client *http.Client, f serverFixture, path,
 				}
 			}
 		}
-		for _, name := range []string{"displayname", "getlastmodified", "resourcetype", "supportedlock"} {
+		for _, name := range []string{"displayname", "getlastmodified", "resourcetype", "supportedlock", "creationdate"} {
 			if statuses[name] != 200 {
 				t.Fatal("implemented collection metadata unavailable")
 			}
 		}
-		for _, name := range []string{"creationdate", "getcontentlength", "getcontenttype", "getetag"} {
+		for _, name := range []string{"getcontentlength", "getcontenttype", "getetag"} {
 			if statuses[name] != 404 {
 				t.Fatal("unimplemented metadata falsely available")
 			}

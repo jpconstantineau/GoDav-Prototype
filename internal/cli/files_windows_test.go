@@ -413,7 +413,7 @@ func TestFilesRangesConditionsAndUnsupportedWrites(t *testing.T) {
 			}
 		}
 	}
-	for _, header := range []string{"If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "If-Range", "If", "Lock-Token"} {
+	for _, header := range []string{"If", "Lock-Token"} {
 		code, _, _ := fileRequest(t, client, f, "PUT", "/dav/data", bytes.NewReader([]byte("changed")), map[string]string{header: "unsupported"})
 		if code != 501 {
 			t.Fatalf("unsupported %s was accepted: %d", header, code)
@@ -829,7 +829,7 @@ func TestFilesV2MigrationAndAccountMaintenance(t *testing.T) {
 func TestFilesRefuseMalformedContentWithoutRepair(t *testing.T) {
 	bin := development(t)
 	for _, statement := range []string{
-		`PRAGMA user_version=4`,
+		`PRAGMA user_version=5`,
 		`DROP TABLE file_contents`,
 		`PRAGMA ignore_check_constraints=ON; UPDATE file_contents SET size=size+1`,
 		`UPDATE file_contents SET content_type='not a media type'`,

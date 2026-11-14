@@ -18,6 +18,12 @@ func namespaceError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case r.Context().Err() != nil:
 		status = 503
+	case errors.Is(err, files.ErrPrecondition):
+		status = 412
+	case errors.Is(err, files.ErrConditionSyntax):
+		status = 400
+	case errors.Is(err, files.ErrConditionLimit):
+		status = 431
 	case errors.Is(err, files.ErrInvalid):
 		status = 400
 	case errors.Is(err, files.ErrMissing):
@@ -53,7 +59,7 @@ func makeCollection(w http.ResponseWriter, r *http.Request, service *files.Servi
 		http.Error(w, "Bad Request", 400)
 		return
 	}
-	if err := service.CreateCollection(r.Context(), path); err != nil {
+	if err := service.CreateCollection(r.Context(), path, publicationExpectation(r)); err != nil {
 		namespaceError(w, r, err)
 		return
 	}

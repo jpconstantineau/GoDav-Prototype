@@ -35,6 +35,7 @@ type Node struct {
 	File              bool
 	Size              int64
 	ContentType, ETag string
+	Metadata          map[string]string
 }
 
 // Snapshot contains one committed listing, with preserved ancestor spelling.
@@ -46,9 +47,10 @@ type Snapshot struct {
 }
 
 type Repository interface {
-	CreateCollection(context.Context, []string) error
+	PatchMetadata(context.Context, []string, MetadataUpdate, Expectation) (Node, error)
+	CreateCollection(context.Context, []string, Expectation) error
 	CollectionSnapshot(context.Context, []string, bool) (Snapshot, error)
-	PutFile(context.Context, []string, []byte, string) (Node, bool, error)
+	PutFile(context.Context, []string, []byte, string, Expectation) (Node, bool, error)
 	ReadFile(context.Context, []string) (Snapshot, []byte, error)
 }
 
@@ -60,7 +62,7 @@ type Service struct {
 
 func New(store Repository) *Service { return &Service{store: store} }
 
-func (s *Service) CreateCollection(ctx context.Context, path string) error {
+func (s *Service) CreateCollection(ctx context.Context, path string, expectation Expectation) error {
 	names, err := Components(path)
 	if err != nil {
 		return err
@@ -68,7 +70,7 @@ func (s *Service) CreateCollection(ctx context.Context, path string) error {
 	if len(names) == 0 {
 		return ErrExists
 	}
-	return s.store.CreateCollection(ctx, names)
+	return s.store.CreateCollection(ctx, names, expectation)
 }
 
 func (s *Service) Snapshot(ctx context.Context, path string, children bool) (Snapshot, error) {

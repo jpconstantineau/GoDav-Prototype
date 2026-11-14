@@ -31,6 +31,12 @@ func (s *AccountStore) PrepareNamespace(ctx context.Context) error {
 	if s.conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version) != nil {
 		return files.ErrUnavailable
 	}
+	if version < 4 {
+		var conflicting int
+		if s.conn.QueryRowContext(ctx, `SELECT count(*) FROM main.sqlite_schema WHERE name='node_metadata' COLLATE NOCASE`).Scan(&conflicting) != nil || conflicting != 0 {
+			return files.ErrUnavailable
+		}
+	}
 	// Preflight the next migration's reserved object before committing any
 	// namespace change. Never adopt a coincidentally named older-state table.
 	if version == 1 || version == 2 {
@@ -39,7 +45,7 @@ func (s *AccountStore) PrepareNamespace(ctx context.Context) error {
 			return files.ErrUnavailable
 		}
 	}
-	if version == 2 || version == 3 {
+	if version == 2 || version == 3 || version == 4 {
 		return nil
 	}
 	if version != 1 {
@@ -113,11 +119,14 @@ func lookupNode(ctx context.Context, q namespaceQuery, names []string) (files.No
 	if fileMetadata(ctx, q, &node) != nil {
 		return files.Node{}, "", files.ErrUnavailable
 	}
+	if loadMetadata(ctx, q, &node) != nil {
+		return files.Node{}, "", files.ErrUnavailable
+	}
 	node.Created, node.Modified = time.Unix(created, 0).UTC(), time.Unix(modified, 0).UTC()
 	return node, strings.Join(canonical, "/"), nil
 }
 
-func (s *AccountStore) CreateCollection(ctx context.Context, names []string) error {
+func (s *AccountStore) CreateCollection(ctx context.Context, names []string, expectation files.Expectation) error {
 	if !s.writable {
 		return files.ErrUnavailable
 	}
@@ -155,6 +164,9 @@ func (s *AccountStore) CreateCollection(ctx context.Context, names []string) err
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return files.ErrUnavailable
+	}
+	if err := expectation.CheckWrite(files.Node{}, false); err != nil {
+		return err
 	}
 	var count int
 	if tx.QueryRowContext(ctx, `SELECT count(*) FROM nodes WHERE parent_id=?`, parent.ID).Scan(&count) != nil {
@@ -210,6 +222,12 @@ func (s *AccountStore) CollectionSnapshot(ctx context.Context, names []string, c
 	}
 	if rows.Err() != nil {
 		return files.Snapshot{}, files.ErrUnavailable
+	}
+	rows.Close()
+	for i := range snapshot.Children {
+		if loadMetadata(ctx, s.conn, &snapshot.Children[i]) != nil {
+			return files.Snapshot{}, files.ErrUnavailable
+		}
 	}
 	return snapshot, nil
 }

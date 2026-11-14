@@ -15,11 +15,11 @@ import (
 // discovery reuses upstream PROPFIND over a read-only committed snapshot.
 func discovery(collections *files.Service, maxBytes int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Allow", "OPTIONS, PROPFIND, MKCOL, GET, HEAD, PUT")
+		w.Header().Set("Allow", "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT")
 		path := strings.TrimPrefix(r.URL.Path, "/dav")
 		path = strings.TrimPrefix(path, "/")
-		if r.Method == "PUT" || r.Method == "MKCOL" {
-			for _, name := range []string{"If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "If-Range", "If", "Lock-Token"} {
+		if r.Method == "PUT" || r.Method == "MKCOL" || r.Method == "PROPPATCH" {
+			for _, name := range []string{"If", "Lock-Token"} {
 				if _, present := r.Header[name]; present {
 					http.Error(w, "Conditional writes not implemented", 501)
 					return
@@ -27,6 +27,9 @@ func discovery(collections *files.Service, maxBytes int64) http.Handler {
 			}
 		}
 		switch r.Method {
+		case "PROPPATCH":
+			patchProperties(w, r, collections, path)
+			return
 		case "PUT":
 			putFile(w, r, collections, path, maxBytes)
 			return
@@ -37,7 +40,12 @@ func discovery(collections *files.Service, maxBytes int64) http.Handler {
 			makeCollection(w, r, collections, path)
 			return
 		case "OPTIONS":
-			if _, err := collections.Snapshot(r.Context(), path, false); err != nil {
+			snapshot, err := collections.Snapshot(r.Context(), path, false)
+			if err != nil {
+				namespaceError(w, r, err)
+				return
+			}
+			if err := publicationExpectation(r).CheckWrite(snapshot.Node, true); err != nil {
 				namespaceError(w, r, err)
 				return
 			}
@@ -83,6 +91,10 @@ func discovery(collections *files.Service, maxBytes int64) http.Handler {
 		}
 		snapshot, err := collections.Snapshot(r.Context(), path, depths[0] == "1")
 		if err != nil {
+			namespaceError(w, r, err)
+			return
+		}
+		if err := publicationExpectation(r).CheckWrite(snapshot.Node, true); err != nil {
 			namespaceError(w, r, err)
 			return
 		}
