@@ -12,11 +12,14 @@ var revision = "unknown"
 var buildTime = "unknown"
 var sourceState = "unknown"
 
-const help = "Usage: godav <command>\n\nCommands:\n  init config [--config <path>] --username <name>  Initialize privately (default: godav.yaml)\n  run server --config <path>  Serve an initialized HTTPS share\n  version  Show build identity\n  help     Show this help\n"
+const help = "Usage: godav <command>\n\nCommands:\n  init config [--config <path>] --username <name>  Initialize privately (default: godav.yaml)\n  run server --config <path>  Serve an initialized HTTPS share\n  add user [--config <path>] --username <name>  Add an account offline\n  reset password [--config <path>] --username <name>  Reset an account offline\n  version  Show build identity\n  help     Show this help\n"
 
 func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) >= 2 && args[0] == "run" && args[1] == "server" {
 		return runServer(args[2:], stdout, stderr)
+	}
+	if len(args) >= 2 && ((args[0] == "add" && args[1] == "user") || (args[0] == "reset" && args[1] == "password")) {
+		return accountCommand(args[0]+" "+args[1], args[2:], stdout, stderr)
 	}
 	if len(args) >= 2 && args[0] == "init" && args[1] == "config" {
 		return initConfig(args[2:], stdout, stderr)
