@@ -30,7 +30,7 @@ func putFile(w http.ResponseWriter, r *http.Request, service *files.Service, pat
 		}
 		contentType = values[0]
 	}
-	node, created, err := service.Put(r.Context(), path, r.Body, r.ContentLength, contentType, maxBytes)
+	node, created, err := service.Put(r.Context(), path, r.Body, r.ContentLength, contentType, maxBytes, publicationExpectation(r))
 	if err != nil {
 		namespaceError(w, r, err)
 		return
@@ -77,6 +77,12 @@ func readFile(w http.ResponseWriter, r *http.Request, service *files.Service, pa
 				namespaceError(w, r, files.ErrExists)
 				return
 			}
+			normalized, normalizeErr := normalizedReadRequest(r)
+			if normalizeErr != nil {
+				namespaceError(w, r, normalizeErr)
+				return
+			}
+			r = normalized
 			probe := &conditionResponse{headers: make(http.Header)}
 			probe.headers.Set("Content-Type", snapshot.Node.ContentType)
 			probe.headers.Set("ETag", snapshot.Node.ETag)
@@ -107,11 +113,16 @@ func readFile(w http.ResponseWriter, r *http.Request, service *files.Service, pa
 		namespaceError(w, r, files.ErrExists)
 		return
 	}
+	normalized, normalizeErr := normalizedReadRequest(r)
+	if normalizeErr != nil {
+		namespaceError(w, r, normalizeErr)
+		return
+	}
+	r = normalized
 	w.Header().Set("Content-Type", snapshot.Node.ContentType)
 	w.Header().Set("ETag", snapshot.Node.ETag)
-	ifRange := r.Header.Get("If-Range")
-	weakDateRange := ifRange != "" && !strings.HasPrefix(ifRange, `"`) && !strings.HasPrefix(ifRange, `W/"`)
-	if values := r.Header.Values("Range"); r.Method == "HEAD" || snapshot.Node.Size == 0 || weakDateRange || len(values) != 1 || !strings.HasPrefix(values[0], "bytes=") || strings.Contains(values[0], ",") {
+	rangeAllowed := permitsRange(r)
+	if values := r.Header.Values("Range"); r.Method == "HEAD" || snapshot.Node.Size == 0 || !rangeAllowed || len(values) != 1 || !strings.HasPrefix(values[0], "bytes=") || strings.Contains(values[0], ",") {
 		r = r.Clone(r.Context())
 		r.Header.Del("Range")
 		r.Header.Del("If-Range")

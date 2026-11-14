@@ -48,7 +48,7 @@ func (s *Service) release(size int64) {
 	s.payloadBytes -= size
 }
 
-func (s *Service) Put(ctx context.Context, path string, body io.Reader, length int64, contentType string, maxBytes int64) (Node, bool, error) {
+func (s *Service) Put(ctx context.Context, path string, body io.Reader, length int64, contentType string, maxBytes int64, expectation Expectation) (Node, bool, error) {
 	names, err := Components(path)
 	if err != nil {
 		return Node{}, false, err
@@ -120,7 +120,7 @@ func (s *Service) Put(ctx context.Context, path string, body io.Reader, length i
 		return Node{}, false, ErrBusy
 	}
 	data = data[:n]
-	return s.store.PutFile(ctx, names, data, contentType)
+	return s.store.PutFile(ctx, names, data, contentType, expectation)
 }
 
 func (s *Service) Read(ctx context.Context, path string) (Snapshot, []byte, func(), error) {

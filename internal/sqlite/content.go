@@ -25,8 +25,11 @@ func (s *AccountStore) PrepareFiles(ctx context.Context) error {
 	if s.conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version) != nil {
 		return files.ErrUnavailable
 	}
-	if version == 3 {
+	if version == 4 {
 		return nil
+	}
+	if version == 3 {
+		return s.prepareMetadata(ctx)
 	}
 	if version != 2 {
 		return files.ErrUnavailable
@@ -47,7 +50,7 @@ func (s *AccountStore) PrepareFiles(ctx context.Context) error {
 	if err != nil || tx.Commit() != nil {
 		return files.ErrUnavailable
 	}
-	return nil
+	return s.prepareMetadata(ctx)
 }
 
 func fileMetadata(ctx context.Context, q namespaceQuery, node *files.Node) error {
@@ -62,7 +65,7 @@ func fileMetadata(ctx context.Context, q namespaceQuery, node *files.Node) error
 	return nil
 }
 
-func (s *AccountStore) PutFile(ctx context.Context, names []string, data []byte, contentType string) (files.Node, bool, error) {
+func (s *AccountStore) PutFile(ctx context.Context, names []string, data []byte, contentType string, expectation files.Expectation) (files.Node, bool, error) {
 	if !s.writable || len(names) == 0 || int64(len(data)) > files.AbsoluteMaxFileBytes {
 		return files.Node{}, false, files.ErrUnavailable
 	}
@@ -93,6 +96,12 @@ func (s *AccountStore) PutFile(ctx context.Context, names []string, data []byte,
 	node, _, err := lookupNode(ctx, tx, names)
 	created := errors.Is(err, files.ErrMissing)
 	if err != nil && !created {
+		return files.Node{}, false, err
+	}
+	if !created && !node.File {
+		return files.Node{}, false, files.ErrExists
+	}
+	if err := expectation.CheckWrite(node, !created); err != nil {
 		return files.Node{}, false, err
 	}
 	now := time.Now().UTC().Truncate(time.Second)

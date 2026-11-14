@@ -65,7 +65,7 @@ func validateAccounts(ctx context.Context, db *sql.Conn) error {
 	if err := db.QueryRowContext(ctx, "PRAGMA application_id").Scan(&application); err != nil {
 		return err
 	}
-	if (version != 1 && version != 2 && version != 3) || application != 1195655510 {
+	if (version != 1 && version != 2 && version != 3 && version != 4) || application != 1195655510 {
 		return errors.New("unsupported database schema")
 	}
 	if err := validateSchema(ctx, db); err != nil {
@@ -109,13 +109,18 @@ FROM accounts`)
 	if enabledCount == 0 {
 		return errors.New("uninitialized accounts")
 	}
-	if version == 2 || version == 3 {
+	if version >= 2 {
 		if err := validateNamespace(ctx, db); err != nil {
 			return err
 		}
 	}
-	if version == 3 {
-		return validateFiles(ctx, db)
+	if version >= 3 {
+		if err := validateFiles(ctx, db); err != nil {
+			return err
+		}
+	}
+	if version == 4 {
+		return validateMetadata(ctx, db)
 	}
 	return nil
 }
