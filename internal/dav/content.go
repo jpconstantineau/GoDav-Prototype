@@ -45,7 +45,7 @@ func putFile(w http.ResponseWriter, r *http.Request, service *files.Service, pat
 
 func readFile(w http.ResponseWriter, r *http.Request, service *files.Service, path string) {
 	if path != "" && strings.HasSuffix(path, "/") {
-		snapshot, err := service.Snapshot(r.Context(), path, false)
+		snapshot, err := service.Snapshot(r.Context(), path, false, publicationExpectation(r))
 		if err != nil {
 			namespaceError(w, r, err)
 			return
@@ -61,14 +61,14 @@ func readFile(w http.ResponseWriter, r *http.Request, service *files.Service, pa
 	var content io.ReadSeeker
 	var err error
 	if r.Method == "HEAD" {
-		snapshot, err = service.Snapshot(r.Context(), path, false)
+		snapshot, err = service.Snapshot(r.Context(), path, false, publicationExpectation(r))
 		content = &metadataReader{size: snapshot.Node.Size}
 	} else {
 		// A conditional metadata-only result must not load content. Evaluate via
 		// the same stdlib semantics using a HEAD clone. If content is needed,
 		// obtain a fresh complete snapshot and re-evaluate against that version.
 		if hasReadCondition(r) {
-			snapshot, err = service.Snapshot(r.Context(), path, false)
+			snapshot, err = service.Snapshot(r.Context(), path, false, publicationExpectation(r))
 			if err != nil {
 				namespaceError(w, r, err)
 				return
@@ -101,7 +101,7 @@ func readFile(w http.ResponseWriter, r *http.Request, service *files.Service, pa
 		}
 		var data []byte
 		var release func()
-		snapshot, data, release, err = service.Read(r.Context(), path)
+		snapshot, data, release, err = service.Read(r.Context(), path, publicationExpectation(r))
 		defer release()
 		content = bytes.NewReader(data)
 	}

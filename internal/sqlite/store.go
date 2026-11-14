@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 )
 
 // AccountStore holds the exact connection on which existing state was validated.
@@ -14,6 +15,7 @@ type AccountStore struct {
 	conn      *sql.Conn
 	writable  bool
 	operation chan struct{}
+	locks     files.LockTable
 }
 
 // OpenExistingReadOnly requires private path checks and exclusive ownership

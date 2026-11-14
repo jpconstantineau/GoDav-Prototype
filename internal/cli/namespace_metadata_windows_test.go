@@ -67,8 +67,8 @@ func namespaceMetadata(t *testing.T, client *http.Client, f serverFixture, path,
 						t.Fatal("collection type missing")
 					}
 				case "supportedlock":
-					if len(property.Locks) != 0 {
-						t.Fatal("unsupported locks advertised")
+					if len(property.Locks) != 1 {
+						t.Fatal("exclusive lock capability missing")
 					}
 				}
 			}

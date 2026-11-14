@@ -415,8 +415,8 @@ func TestFilesRangesConditionsAndUnsupportedWrites(t *testing.T) {
 	}
 	for _, header := range []string{"If", "Lock-Token"} {
 		code, _, _ := fileRequest(t, client, f, "PUT", "/dav/data", bytes.NewReader([]byte("changed")), map[string]string{header: "unsupported"})
-		if code != 501 {
-			t.Fatalf("unsupported %s was accepted: %d", header, code)
+		if code != 400 {
+			t.Fatalf("invalid %s was accepted: %d", header, code)
 		}
 	}
 	for _, tc := range []struct {
@@ -433,7 +433,7 @@ func TestFilesRangesConditionsAndUnsupportedWrites(t *testing.T) {
 		t.Fatal("rejected writes changed state")
 	}
 	code, _, _ = fileRequest(t, client, f, "MKCOL", "/dav/conditional/", nil, map[string]string{"If": "unsupported"})
-	if code != 501 {
+	if code != 400 {
 		t.Fatal("collection ignored write condition")
 	}
 }

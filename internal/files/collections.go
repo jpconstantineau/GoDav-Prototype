@@ -36,6 +36,7 @@ type Node struct {
 	Size              int64
 	ContentType, ETag string
 	Metadata          map[string]string
+	Locks             []Lease
 }
 
 // Snapshot contains one committed listing, with preserved ancestor spelling.
@@ -47,11 +48,14 @@ type Snapshot struct {
 }
 
 type Repository interface {
+	CreateLock(context.Context, []string, LockRequest, Expectation) (Lease, bool, error)
+	RefreshLock(context.Context, []string, string, time.Duration, Expectation) (Lease, error)
+	Unlock(context.Context, []string, string, Expectation) error
 	PatchMetadata(context.Context, []string, MetadataUpdate, Expectation) (Node, error)
 	CreateCollection(context.Context, []string, Expectation) error
-	CollectionSnapshot(context.Context, []string, bool) (Snapshot, error)
+	CollectionSnapshot(context.Context, []string, bool, ...Expectation) (Snapshot, error)
 	PutFile(context.Context, []string, []byte, string, Expectation) (Node, bool, error)
-	ReadFile(context.Context, []string) (Snapshot, []byte, error)
+	ReadFile(context.Context, []string, ...Expectation) (Snapshot, []byte, error)
 }
 
 type Service struct {
@@ -73,12 +77,12 @@ func (s *Service) CreateCollection(ctx context.Context, path string, expectation
 	return s.store.CreateCollection(ctx, names, expectation)
 }
 
-func (s *Service) Snapshot(ctx context.Context, path string, children bool) (Snapshot, error) {
+func (s *Service) Snapshot(ctx context.Context, path string, children bool, expectations ...Expectation) (Snapshot, error) {
 	names, err := Components(path)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snapshot, err := s.store.CollectionSnapshot(ctx, names, children)
+	snapshot, err := s.store.CollectionSnapshot(ctx, names, children, expectations...)
 	if err == nil && snapshot.Node.File && strings.HasSuffix(path, "/") {
 		return Snapshot{}, ErrInvalid
 	}

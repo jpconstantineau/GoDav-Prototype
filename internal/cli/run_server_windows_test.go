@@ -220,7 +220,7 @@ func TestRunServerAuthenticatesStoredAccount(t *testing.T) {
 			if response.StatusCode != tc.status {
 				t.Fatalf("unexpected auth status %d", response.StatusCode)
 			}
-			if tc.status == 200 && (response.Header.Get("Allow") != "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT" || response.Header.Get("DAV") != "") {
+			if tc.status == 200 && (response.Header.Get("Allow") != "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT, LOCK, UNLOCK" || response.Header.Get("DAV") != "") {
 				t.Fatal("partial discovery advertises unsupported capability")
 			}
 			if tc.status == 401 && response.Header.Get("WWW-Authenticate") != `Basic realm="GoDav"` {
@@ -271,15 +271,14 @@ func TestRunServerDiscoversOnlyEmptyRoot(t *testing.T) {
 				t.Fatal("discovery did not return one canonical root")
 			}
 			collection := false
+			lockEntries := 0
 			for _, ps := range multistatus.Responses[0].Propstats {
 				if ps.Prop.Collection != nil && ps.Status == "HTTP/1.1 200 OK" {
 					collection = true
 				}
-				if len(ps.Prop.SupportedLock.Entries) > 0 {
-					t.Fatal("discovery falsely advertised locks")
-				}
+				lockEntries += len(ps.Prop.SupportedLock.Entries)
 			}
-			if !collection {
+			if !collection || lockEntries != 1 {
 				t.Fatal("root is not a collection")
 			}
 		}
@@ -796,6 +795,7 @@ func TestRunServerPreservesDiscoveryXMLNamespacesAndBound(t *testing.T) {
 				t.Fatal("discovery response exceeded its bound or failed")
 			}
 			decoder := xml.NewDecoder(bytes.NewReader(data))
+			lockEntries := 0
 			for {
 				token, err := decoder.Token()
 				if err == io.EOF {
@@ -813,9 +813,12 @@ func TestRunServerPreservesDiscoveryXMLNamespacesAndBound(t *testing.T) {
 						seen[attr.Name] = true
 					}
 					if start.Name == (xml.Name{Space: "DAV:", Local: "lockentry"}) {
-						t.Fatal("unsupported write lock advertised")
+						lockEntries++
 					}
 				}
+			}
+			if lockEntries != 1 {
+				t.Fatal("exclusive lock capability missing")
 			}
 		})
 	}

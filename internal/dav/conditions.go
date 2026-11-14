@@ -1,6 +1,7 @@
 package dav
 
 import (
+	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"net/http"
 	"strings"
@@ -73,6 +74,15 @@ func parseTags(values []string) (files.TagExpectation, error) {
 }
 func publicationExpectation(r *http.Request) files.Expectation {
 	var e files.Expectation
+	e.Principal = auth.Principal(r.Context())
+	if r.Method != "UNLOCK" && len(r.Header.Values("Lock-Token")) > 0 {
+		e.Invalid = files.ErrConditionSyntax
+		return e
+	}
+	e.DAV, e.Invalid = parseDAVIf(r)
+	if e.Invalid != nil {
+		return e
+	}
 	combined := 0
 	for _, name := range []string{"If-Match", "If-None-Match"} {
 		for i, v := range r.Header.Values(name) {

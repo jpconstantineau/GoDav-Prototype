@@ -15,18 +15,16 @@ import (
 // discovery reuses upstream PROPFIND over a read-only committed snapshot.
 func discovery(collections *files.Service, maxBytes int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Allow", "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT")
+		w.Header().Set("Allow", "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT, LOCK, UNLOCK")
 		path := strings.TrimPrefix(r.URL.Path, "/dav")
 		path = strings.TrimPrefix(path, "/")
-		if r.Method == "PUT" || r.Method == "MKCOL" || r.Method == "PROPPATCH" {
-			for _, name := range []string{"If", "Lock-Token"} {
-				if _, present := r.Header[name]; present {
-					http.Error(w, "Conditional writes not implemented", 501)
-					return
-				}
-			}
-		}
 		switch r.Method {
+		case "LOCK":
+			lockResource(w, r, collections, path)
+			return
+		case "UNLOCK":
+			unlockResource(w, r, collections, path)
+			return
 		case "PROPPATCH":
 			patchProperties(w, r, collections, path)
 			return
@@ -40,7 +38,7 @@ func discovery(collections *files.Service, maxBytes int64) http.Handler {
 			makeCollection(w, r, collections, path)
 			return
 		case "OPTIONS":
-			snapshot, err := collections.Snapshot(r.Context(), path, false)
+			snapshot, err := collections.Snapshot(r.Context(), path, false, publicationExpectation(r))
 			if err != nil {
 				namespaceError(w, r, err)
 				return
@@ -89,7 +87,7 @@ func discovery(collections *files.Service, maxBytes int64) http.Handler {
 			http.Error(w, "Bad Request", 400)
 			return
 		}
-		snapshot, err := collections.Snapshot(r.Context(), path, depths[0] == "1")
+		snapshot, err := collections.Snapshot(r.Context(), path, depths[0] == "1", publicationExpectation(r))
 		if err != nil {
 			namespaceError(w, r, err)
 			return
@@ -113,11 +111,7 @@ func discovery(collections *files.Service, maxBytes int64) http.Handler {
 			http.Error(w, http.StatusText(response.status), response.status)
 			return
 		}
-		payload, err := withoutWriteLocks(response.body.Bytes())
-		if err != nil {
-			http.Error(w, "Discovery failed", http.StatusInternalServerError)
-			return
-		}
+		payload := response.body.Bytes()
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 		w.WriteHeader(http.StatusMultiStatus)
 		_, _ = w.Write(payload)
@@ -146,52 +140,6 @@ func (w *discoveryResponse) Write(p []byte) (int, error) {
 		return 0, errors.New("discovery response too large")
 	}
 	return w.body.Write(p)
-}
-
-// Upstream always advertises exclusive write locks. This root-only slice has no
-// locking, so the supportedlock value must be empty, including allprop and explicit
-// requests. Keep upstream XML status/property behavior; alter only this value.
-func withoutWriteLocks(input []byte) ([]byte, error) {
-	decoder := xml.NewDecoder(bytes.NewReader(input))
-	var output bytes.Buffer
-	copied := int64(0)
-	for {
-		token, err := decoder.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		start, ok := token.(xml.StartElement)
-		if !ok || start.Name != (xml.Name{Space: "DAV:", Local: "supportedlock"}) {
-			continue
-		}
-		contentStart := decoder.InputOffset()
-		depth := 1
-		var endStart int64
-		for depth > 0 {
-			endStart = decoder.InputOffset()
-			token, err = decoder.Token()
-			if err != nil {
-				return nil, err
-			}
-			switch token.(type) {
-			case xml.StartElement:
-				depth++
-			case xml.EndElement:
-				depth--
-			}
-		}
-		// Preserve upstream namespace spelling and attributes exactly. Re-encoding
-		// expanded tokens can duplicate xmlns attributes and expand the response.
-		// Only remove bytes: the result cannot exceed the bounded upstream buffer.
-		output.Write(input[copied:contentStart])
-		output.Write(input[endStart:decoder.InputOffset()])
-		copied = decoder.InputOffset()
-	}
-	output.Write(input[copied:])
-	return output.Bytes(), nil
 }
 
 // Bound XML nesting/property counts and reject a second document or trailing

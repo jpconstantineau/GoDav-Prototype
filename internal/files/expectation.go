@@ -21,6 +21,8 @@ type TagExpectation struct {
 	Tags         []EntityTag
 }
 type Expectation struct {
+	Principal       string
+	DAV             DAVExpectation
 	Match, NotMatch TagExpectation
 	UnmodifiedSince time.Time
 	Invalid         error

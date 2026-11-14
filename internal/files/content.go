@@ -123,7 +123,7 @@ func (s *Service) Put(ctx context.Context, path string, body io.Reader, length i
 	return s.store.PutFile(ctx, names, data, contentType, expectation)
 }
 
-func (s *Service) Read(ctx context.Context, path string) (Snapshot, []byte, func(), error) {
+func (s *Service) Read(ctx context.Context, path string, expectations ...Expectation) (Snapshot, []byte, func(), error) {
 	noop := func() {}
 	names, err := Components(path)
 	if err != nil {
@@ -135,7 +135,7 @@ func (s *Service) Read(ctx context.Context, path string) (Snapshot, []byte, func
 	if !s.reserve(AbsoluteMaxFileBytes) {
 		return Snapshot{}, nil, noop, ErrBusy
 	}
-	snapshot, data, err := s.store.ReadFile(ctx, names)
+	snapshot, data, err := s.store.ReadFile(ctx, names, expectations...)
 	if err != nil {
 		s.release(AbsoluteMaxFileBytes)
 		return Snapshot{}, nil, noop, err

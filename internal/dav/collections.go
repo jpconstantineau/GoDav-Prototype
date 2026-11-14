@@ -1,10 +1,13 @@
 package dav
 
 import (
+	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -14,10 +17,63 @@ import (
 )
 
 func namespaceError(w http.ResponseWriter, r *http.Request, err error) {
+	if r.Context().Err() == nil {
+		var conflict *files.LockConflict
+		if errors.As(err, &conflict) && conflict.Descendant {
+			var b bytes.Buffer
+			b.WriteString(`<d:multistatus xmlns:d="DAV:"><d:response><d:href>`)
+			xml.EscapeText(&b, []byte((&url.URL{Path: "/dav/" + conflict.Path}).EscapedPath()))
+			b.WriteString(`</d:href><d:status>HTTP/1.1 423 Locked</d:status><d:error><d:no-conflicting-lock/></d:error></d:response><d:response><d:href>`)
+			xml.EscapeText(&b, []byte(r.URL.EscapedPath()))
+			b.WriteString(`</d:href><d:status>HTTP/1.1 424 Failed Dependency</d:status></d:response></d:multistatus>`)
+			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+			w.WriteHeader(207)
+			_, _ = w.Write(b.Bytes())
+			return
+		}
+		name, status := "", 0
+		switch {
+		case errors.Is(err, files.ErrLocked):
+			name, status = "lock-token-submitted", 423
+		case errors.Is(err, files.ErrLockConflict):
+			name, status = "no-conflicting-lock", 423
+		case errors.Is(err, files.ErrLockScope):
+			name, status = "lock-token-matches-request-uri", 412
+		case errors.Is(err, files.ErrUnlockScope):
+			name, status = "lock-token-matches-request-uri", 409
+		}
+		if status != 0 {
+			path := r.URL.EscapedPath()
+			var required *files.LockRequired
+			if errors.As(err, &required) {
+				path = (&url.URL{Path: "/dav/" + required.Path}).EscapedPath()
+			}
+			var b bytes.Buffer
+			b.WriteString(`<d:error xmlns:d="DAV:"><d:` + name + `>`)
+			if status == 423 {
+				b.WriteString(`<d:href>`)
+				xml.EscapeText(&b, []byte(path))
+				b.WriteString(`</d:href>`)
+			}
+			b.WriteString(`</d:` + name + `></d:error>`)
+			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+			w.WriteHeader(status)
+			_, _ = w.Write(b.Bytes())
+			return
+		}
+	}
 	status := http.StatusInternalServerError
 	switch {
 	case r.Context().Err() != nil:
 		status = 503
+	case errors.Is(err, files.ErrLocked), errors.Is(err, files.ErrLockConflict):
+		status = 423
+	case errors.Is(err, files.ErrLockOwner):
+		status = 403
+	case errors.Is(err, files.ErrLockScope):
+		status = 412
+	case errors.Is(err, files.ErrUnlockScope):
+		status = 409
 	case errors.Is(err, files.ErrPrecondition):
 		status = 412
 	case errors.Is(err, files.ErrConditionSyntax):

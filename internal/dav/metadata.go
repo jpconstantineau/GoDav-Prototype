@@ -27,6 +27,12 @@ var xmlDeclaration = regexp.MustCompile(`^[ \t\r\n]*version[ \t\r\n]*=[ \t\r\n]*
 func (f *collectionFile) DeadProps() (map[xml.Name]webdav.Property, error) {
 	name := xml.Name{Space: "DAV:", Local: "creationdate"}
 	props := map[xml.Name]webdav.Property{name: {XMLName: name, InnerXML: []byte(f.info.node.Created.UTC().Format(time.RFC3339))}}
+	locks, err := encodeLockDiscovery(f.info.node.Locks)
+	if err != nil {
+		return nil, err
+	}
+	lockName := xml.Name{Space: "DAV:", Local: "lockdiscovery"}
+	props[lockName] = webdav.Property{XMLName: lockName, InnerXML: locks}
 	for key, value := range f.info.node.Metadata {
 		var b bytes.Buffer
 		xml.EscapeText(&b, []byte(value))

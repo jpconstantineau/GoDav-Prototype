@@ -56,6 +56,7 @@ func Handler(accounts AccountLookup, collections *files.Service, origin string, 
 		}
 		// Expensive verification is bounded separately from admitted DAV work.
 		// No receiving upload or slow response retains an authentication permit.
+		principal := ""
 		found, matches, err := func() (bool, bool, error) {
 			defer func() { <-slots }()
 			account, found, err := accounts.LookupEnabled(r.Context(), username)
@@ -66,6 +67,9 @@ func Handler(accounts AccountLookup, collections *files.Service, origin string, 
 				account = auth.DummyAccount()
 			}
 			matches := account.VerifyPassword(password)
+			if found && matches {
+				principal = account.ID
+			}
 			return found, matches, r.Context().Err()
 		}()
 		if err != nil {
@@ -76,7 +80,7 @@ func Handler(accounts AccountLookup, collections *files.Service, origin string, 
 			reject()
 			return
 		}
-		mux.ServeHTTP(w, r)
+		mux.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), principal)))
 	})
 }
 

@@ -165,7 +165,7 @@ func (s *AccountStore) CreateCollection(ctx context.Context, names []string, exp
 	if !errors.Is(err, sql.ErrNoRows) {
 		return files.ErrUnavailable
 	}
-	if err := expectation.CheckWrite(files.Node{}, false); err != nil {
+	if err := s.checkWrite(ctx, tx, names, files.Node{}, false, true, expectation); err != nil {
 		return err
 	}
 	var count int
@@ -192,7 +192,7 @@ func (s *AccountStore) CreateCollection(ctx context.Context, names []string, exp
 	return nil
 }
 
-func (s *AccountStore) CollectionSnapshot(ctx context.Context, names []string, children bool) (files.Snapshot, error) {
+func (s *AccountStore) CollectionSnapshot(ctx context.Context, names []string, children bool, expectations ...files.Expectation) (files.Snapshot, error) {
 	var snapshot files.Snapshot
 	if err := s.acquire(ctx); err != nil {
 		return snapshot, err
@@ -202,6 +202,13 @@ func (s *AccountStore) CollectionSnapshot(ctx context.Context, names []string, c
 	if err != nil {
 		return snapshot, err
 	}
+	for _, e := range expectations {
+		if err := s.checkDAV(ctx, s.conn, names, node, true, e); err != nil {
+			return snapshot, err
+		}
+	}
+	s.locks.Expire(time.Now())
+	node.Locks = s.locks.At(path)
 	snapshot.Node, snapshot.Path = node, path
 	if !children || node.File {
 		return snapshot, nil
@@ -228,6 +235,11 @@ func (s *AccountStore) CollectionSnapshot(ctx context.Context, names []string, c
 		if loadMetadata(ctx, s.conn, &snapshot.Children[i]) != nil {
 			return files.Snapshot{}, files.ErrUnavailable
 		}
+		childPath := snapshot.Children[i].Name
+		if path != "" {
+			childPath = path + "/" + childPath
+		}
+		snapshot.Children[i].Locks = s.locks.At(childPath)
 	}
 	return snapshot, nil
 }

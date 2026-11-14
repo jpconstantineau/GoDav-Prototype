@@ -73,6 +73,11 @@ func (s *AccountStore) PutFile(ctx context.Context, names []string, data []byte,
 		return files.Node{}, false, err
 	}
 	defer s.release()
+	return s.putFile(ctx, names, data, contentType, expectation)
+}
+
+// putFile requires operation ownership, including for LOCK's atomic empty file.
+func (s *AccountStore) putFile(ctx context.Context, names []string, data []byte, contentType string, expectation files.Expectation) (files.Node, bool, error) {
 	tx, err := s.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return files.Node{}, false, files.ErrUnavailable
@@ -101,7 +106,7 @@ func (s *AccountStore) PutFile(ctx context.Context, names []string, data []byte,
 	if !created && !node.File {
 		return files.Node{}, false, files.ErrExists
 	}
-	if err := expectation.CheckWrite(node, !created); err != nil {
+	if err := s.checkWrite(ctx, tx, names, node, !created, created, expectation); err != nil {
 		return files.Node{}, false, err
 	}
 	now := time.Now().UTC().Truncate(time.Second)
@@ -150,7 +155,7 @@ func (s *AccountStore) PutFile(ctx context.Context, names []string, data []byte,
 	return node, created, nil
 }
 
-func (s *AccountStore) ReadFile(ctx context.Context, names []string) (files.Snapshot, []byte, error) {
+func (s *AccountStore) ReadFile(ctx context.Context, names []string, expectations ...files.Expectation) (files.Snapshot, []byte, error) {
 	if err := s.acquire(ctx); err != nil {
 		return files.Snapshot{}, nil, err
 	}
@@ -161,6 +166,11 @@ func (s *AccountStore) ReadFile(ctx context.Context, names []string) (files.Snap
 	}
 	if !node.File {
 		return files.Snapshot{}, nil, files.ErrExists
+	}
+	for _, e := range expectations {
+		if err := s.checkDAV(ctx, s.conn, names, node, true, e); err != nil {
+			return files.Snapshot{}, nil, err
+		}
 	}
 	if fileReadFailure() != nil {
 		return files.Snapshot{}, nil, files.ErrUnavailable

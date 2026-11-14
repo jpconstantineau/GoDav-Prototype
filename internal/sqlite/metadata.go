@@ -65,7 +65,7 @@ func (s *AccountStore) PatchMetadata(ctx context.Context, names []string, update
 	if update.CollectionOnly && node.File {
 		return files.Node{}, files.ErrInvalid
 	}
-	if err := expectation.CheckWrite(node, true); err != nil {
+	if err := s.checkWrite(ctx, tx, names, node, true, false, expectation); err != nil {
 		return files.Node{}, err
 	}
 	before := maps.Clone(node.Metadata)
