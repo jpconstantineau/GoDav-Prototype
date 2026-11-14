@@ -3,6 +3,65 @@
 Date: 2026-11-14. Native host: Zen, Windows amd64. Initial worktree branch:
 codex/godav-02-bootstrap, based on reviewed integration bf6e765.
 
+## YAML privacy and shared Windows component corrections
+
+Correction worktree: `ticket-02-yaml-privacy`, branch
+`codex/godav-02-yaml-privacy`, based on reviewed candidate
+`a54658db55fd3f7f30eeec7f156b49d031191f4c`. Integration `bf6e765` remains an
+ancestor. This pass does not merge or change the prior candidate, integration,
+original checkout, owner documents, or existing evidence logs.
+
+The existing-YAML owner/DACL omission was a static-source review finding. A new
+public-CLI regression copied legitimate disposable settings/account data into a
+new private fixture directory, creating the YAML with an explicit broad file
+DACL and the DB with a private DACL. The uncorrected CLI failed the refusal
+assertion; the corrected CLI refuses before reading YAML or creating lock state.
+The final fixture asserts unchanged YAML/DB bytes and unchanged YAML owner/DACL.
+No existing file/directory ACL or token default was changed, and no unrelated-user
+access exploit was attempted. Private existing-state no-op, including files in a
+non-inheriting private directory, still preserves data. The YAML private-file
+check runs initially and again under ownership; this is not a hostile-swap test.
+
+The duplicate Windows component rules now use one small lexical predicate. Raw
+settings path policy and absolute local-drive/OS checks remain separate. Public
+CLI baseline/refactor coverage preserves device-name refusals (including CLOCK$,
+spaces before extensions, COM/LPT digits and superscript prefixes) and successful
+initialization/restart for ordinary COM10, COM1tail, LPT10, LPT9notes and NULdata
+filenames. An additional red/green case proves raw normalization no longer erases
+a superscript-device-prefix component that the absolute-path policy refuses.
+
+Fresh checks on corrected code, using the isolated verified Go 1.27.4 toolchain:
+
+- Full `go test ./... -count=1 -v -timeout=5m`: passed, CLI 129.590 seconds.
+- Windows/Linux `go vet ./...`, `go mod verify`, and `go mod tidy -diff`: passed.
+  No module or checksum changes were needed.
+- Windows/Linux application and `-test` govulncheck v1.9.0: all four scans passed
+  with no known vulnerabilities. Windows covered 12 modules and Linux 11,
+  including the application. Audited dependency pins remain unchanged.
+- Existing GCC 14.2.0 `CGO_ENABLED=1 go test -race ./internal/cli -run
+  '^TestInitConfig' -count=1 -v -timeout=5m`: passed, 83.315 seconds. This instruments
+  only the harness and in-process fixtures, not the CGO-free CLI subprocesses.
+- Final focused correction/release rerun: passed, 21.996 seconds. Both Windows
+  and Linux release artifacts exclude test fault tags/markers and retain exact
+  companion notices. Windows version executed; Linux was inspected only.
+
+Evidence is outside the repository in
+`GoDav-Project-Tools/logs/slice02-yamlprivacy-*-20261114.log`. Suffixes identify
+`dacl-red`, `dacl-green`, `path-baseline`, `path-red`, `path-green`, `full-suite`,
+`vet-windows`, `vet-linux`, `mod-verify`, `tidy-diff`, four
+`vuln-{windows,linux}-{application,tests}` scans, `race-harness`,
+`final-focused-release`, and toolchain/scanner/GCC versions. Expected red failures
+are retained. `slice02-yamlprivacy-evidence-sha256-20261114.log` records the new
+logs and final source identity without overwriting the prior evidence manifest.
+
+All prior limits remain: no Linux runtime, actual power-loss/interrupted-write,
+hostile-swap/reparse or broader token-default experiment was performed. Denied
+hardlink/junction creation was not retried. Private parent inheritance, pinned
+parent handles, bounded NUL-inclusive SQL reads, real PRAGMA metadata and sidecar
+refusals remain in place. No new dependency, recovery command, automatic
+bootstrap, listener, trust, service, install, push or GitHub write was added.
+Independent fixed-commit re-review is still required before integration.
+
 ## Fixed-commit review corrections
 
 Correction worktree: `ticket-02-review-fixes`, branch

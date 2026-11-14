@@ -107,11 +107,20 @@ func privateFixtureWithInheritance(t *testing.T, inheritance string) string {
 
 func writeRestrictedFixtureFile(t *testing.T, path string, data []byte) {
 	t.Helper()
+	writeFixtureFileWithACL(t, path, data, false)
+}
+
+func writeFixtureFileWithACL(t *testing.T, path string, data []byte, broad bool) {
+	t.Helper()
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal("fixture token lookup failed")
 	}
-	sd, err := windows.SecurityDescriptorFromString("O:" + user.User.Sid.String() + "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + user.User.Sid.String() + ")")
+	dacl := "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + user.User.Sid.String() + ")"
+	if broad {
+		dacl += "(A;;FRFW;;;WD)"
+	}
+	sd, err := windows.SecurityDescriptorFromString("O:" + user.User.Sid.String() + dacl)
 	if err != nil {
 		t.Fatal("fixture descriptor failed")
 	}
@@ -128,6 +137,50 @@ func writeRestrictedFixtureFile(t *testing.T, path string, data []byte) {
 	}
 	if f.Close() != nil {
 		t.Fatal("private file fixture close failed")
+	}
+}
+
+func TestInitConfigRejectsBroadSettingsFileWithoutMutation(t *testing.T) {
+	bin := development(t)
+	source := privateFixture(t)
+	_, _, _, code := privateConsoleCommand(t, source, bin, "init", "config", "--username", "FixtureUser")
+	if code != 0 {
+		t.Fatal("fixture initialization failed")
+	}
+	// Every target is new and test-owned. Only the YAML gets a broad explicit
+	// creation DACL; no existing ACL or process-token default is changed.
+	dir := privateFixture(t)
+	before := map[string][sha256.Size]byte{}
+	for _, name := range []string{"godav.yaml", "godav.sqlite"} {
+		data, err := os.ReadFile(filepath.Join(source, name))
+		if err != nil {
+			t.Fatal("private source fixture read failed")
+		}
+		writeFixtureFileWithACL(t, filepath.Join(dir, name), data, name == "godav.yaml")
+		before[name] = sha256.Sum256(data)
+	}
+	config := filepath.Join(dir, "godav.yaml")
+	beforeSecurity, err := windows.GetNamedSecurityInfo(config, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal("settings fixture security inspection failed")
+	}
+	out, stderr, code := command(t, dir, bin, "init", "config", "--username", "Replacement")
+	for name, digest := range before {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || sha256.Sum256(data) != digest {
+			t.Fatal("broad-settings refusal changed fixture data")
+		}
+	}
+	afterSecurity, err := windows.GetNamedSecurityInfo(config, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil || beforeSecurity.String() != afterSecurity.String() {
+		t.Fatal("broad-settings refusal repaired or changed file permissions")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != len(before) {
+		t.Fatal("broad-settings refusal created additional state")
+	}
+	if code != 1 || out != "" || stderr != "godav: settings are missing, unsafe or inaccessible\n" {
+		t.Fatal("broad settings file was not refused safely")
 	}
 }
 
@@ -589,5 +642,69 @@ func TestInitConfigRejectsRawPathAliasesBeforeNormalization(t *testing.T) {
 		if err != nil || len(entries) != 0 {
 			t.Fatal("raw path alias refusal wrote state")
 		}
+	}
+}
+
+func TestInitConfigRejectsWindowsDeviceAndAliasComponents(t *testing.T) {
+	bin := development(t)
+	for _, name := range []string{
+		"CON.yaml", "prn.yaml", "AUX.yaml", "NUL.yaml", "CLOCK$.yaml", "CONIN$.yaml", "CONOUT$.yaml",
+		"COM0.yaml", "COM9.yaml", "LPT0.yaml", "LPT9.yaml", "CON .yaml",
+		"COM\u00b9.yaml", "COM\u00b2.yaml", "COM\u00b3.yaml", "LPT\u00b9.yaml", "LPT\u00b2.yaml", "LPT\u00b3.yaml",
+		"COM\u00b9suffix.yaml", "LPT\u00b3suffix.yaml", "trailing.", "trailing ", "bad?.yaml", "bad\x7f.yaml",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := privateFixture(t)
+			out, stderr, code := command(t, dir, bin, "init", "config", "--config", name, "--username", "FixtureUser")
+			if code != 1 || out != "" || (stderr != "godav: invalid settings path\n" && stderr != "godav: unsafe settings path\n") {
+				t.Fatal("Windows device or alias component was not refused")
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 0 {
+				t.Fatal("Windows component refusal wrote state")
+			}
+		})
+	}
+}
+
+func TestInitConfigAcceptsOrdinaryWindowsNames(t *testing.T) {
+	bin := development(t)
+	for _, name := range []string{"COM10.yaml", "COM1tail.yaml", "LPT10.yaml", "LPT9notes.yaml", "NULdata.yaml"} {
+		t.Run(name, func(t *testing.T) {
+			dir := privateFixture(t)
+			_, out, stderr, code := privateConsoleCommand(t, dir, bin, "init", "config", "--config", name, "--username", "FixtureUser")
+			if code != 0 || stderr != "" || out != "godav: initialized; configure TLS before serving\n" {
+				t.Fatal("ordinary Windows filename was not accepted")
+			}
+			configPath, dbPath := filepath.Join(dir, name), filepath.Join(dir, "godav.sqlite")
+			beforeConfig, configErr := os.ReadFile(configPath)
+			beforeDB, dbErr := os.ReadFile(dbPath)
+			if configErr != nil || dbErr != nil {
+				t.Fatal("ordinary-name fixture state missing")
+			}
+			out, stderr, code = command(t, dir, bin, "init", "config", "--config", `.\`+name, "--username", "FixtureUser")
+			afterConfig, configErr := os.ReadFile(configPath)
+			afterDB, dbErr := os.ReadFile(dbPath)
+			if code != 0 || stderr != "" || out != "godav: already initialized\n" || configErr != nil || dbErr != nil ||
+				!bytes.Equal(beforeConfig, afterConfig) || !bytes.Equal(beforeDB, afterDB) {
+				t.Fatal("ordinary-name relative restart did not preserve state")
+			}
+		})
+	}
+}
+
+func TestInitConfigRejectsSuperscriptDevicePrefixBeforeNormalization(t *testing.T) {
+	bin := development(t)
+	dir := privateFixture(t)
+	// Normalization must not erase a component that the absolute-path policy
+	// already refuses, even when ordinary Windows files could use this spelling.
+	path := "COM\u00b9suffix\\..\\godav.yaml"
+	out, stderr, code := command(t, dir, bin, "init", "config", "--config", path, "--username", "FixtureUser")
+	if code != 1 || out != "" || stderr != "godav: invalid settings path\n" {
+		t.Fatal("normalization concealed a refused superscript device prefix")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		t.Fatal("superscript device prefix refusal wrote state")
 	}
 }

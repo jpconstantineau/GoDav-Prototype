@@ -41,6 +41,9 @@ func Init(config, username string, openConsole func() (*os.File, error)) (bool, 
 	}
 	var current settings.Settings
 	if existing {
+		if err := checkPrivateFile(config); err != nil {
+			return false, errors.New("settings are missing, unsafe or inaccessible")
+		}
 		current, err = settings.Load(config)
 		if err != nil {
 			return false, errors.New("invalid settings")
@@ -99,8 +102,8 @@ func Init(config, username string, openConsole func() (*os.File, error)) (bool, 
 	}
 	defer lock.Close()
 	if existing {
-		if checkPath(config, false) != nil {
-			return false, errors.New("unsafe settings path")
+		if err := checkPrivateFile(config); err != nil {
+			return false, errors.New("settings are missing, unsafe or inaccessible")
 		}
 		rechecked, err := settings.Load(config)
 		if err != nil || rechecked != current {

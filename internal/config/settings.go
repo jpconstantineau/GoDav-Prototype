@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jpconstantineau/GoDav-Prototype/internal/winpath"
+
 	"go.yaml.in/yaml/v3"
 )
 
@@ -274,14 +276,6 @@ func safePath(s string) bool {
 		}
 		p = p[3:]
 	}
-	if p == "" || strings.ContainsAny(p, ":<>\"|?*") {
-		return false
-	}
-	for _, c := range p {
-		if c < 32 || c == 127 {
-			return false
-		}
-	}
 	parts := strings.Split(p, "\\")
 	for i, part := range parts {
 		if part == "." || part == ".." {
@@ -290,20 +284,8 @@ func safePath(s string) bool {
 			}
 			continue
 		}
-		if part == "" || strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") {
+		if !winpath.ValidComponent(part) {
 			return false
-		}
-		base := strings.ToUpper(strings.SplitN(part, ".", 2)[0])
-		base = strings.TrimRight(base, " ")
-		switch base {
-		case "CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$":
-			return false
-		}
-		if strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT") {
-			suffix := base[3:]
-			if len(suffix) == 1 && suffix[0] >= '0' && suffix[0] <= '9' || suffix == "\u00b9" || suffix == "\u00b2" || suffix == "\u00b3" {
-				return false
-			}
 		}
 	}
 	return true

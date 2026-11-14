@@ -79,6 +79,18 @@ pass their private owner/DACL checks. No existing permissions or token defaults
 are changed. See Microsoft's [new-object DACL algorithm](https://learn.microsoft.com/en-us/windows/win32/secauthz/dacl-for-a-new-object)
 and [independent child-file access rules](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights).
 
+Existing YAML itself must pass the private-file owner/DACL and path checks before
+its first read and again under exclusive ownership before rereading. A private
+parent alone does not make a broadly granted YAML file acceptable. Refuse it
+without permission repair or changes to persistent state.
+
+Raw settings paths and absolute Windows paths share one conservative component
+policy, including CLOCK$, device stems with extensions/spaces, COM/LPT digits 0-9,
+and superscript 1/2/3 device prefixes even with additional suffix text. Ordinary
+names such as COM10 and COM1tail remain valid. Raw-path navigation/rooting policy
+stays in settings validation, before normalization; fixed-drive and filesystem
+identity checks stay in the Windows adapter.
+
 Fresh provisioning validates the real private console before any state write,
 including creation of an ownership artifact. Existing-valid no-op does not
 require a console; it may create/acquire stable empty lock metadata, but leaves

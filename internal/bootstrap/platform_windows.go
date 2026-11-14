@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/jpconstantineau/GoDav-Prototype/internal/winpath"
+
 	"golang.org/x/sys/windows"
 )
 
@@ -27,19 +29,7 @@ func localPath(path string) ([]string, error) {
 		parts = nil
 	}
 	for _, part := range parts {
-		if part == "" || part == "." || part == ".." || strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") || strings.ContainsAny(part, `<>"|?*`) {
-			return nil, errUnsafePath
-		}
-		for _, r := range part {
-			if r < 32 {
-				return nil, errUnsafePath
-			}
-		}
-		stem, _, _ := strings.Cut(strings.ToUpper(part), ".")
-		if stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" || stem == "CONIN$" || stem == "CONOUT$" ||
-			(len(stem) == 4 && (strings.HasPrefix(stem, "COM") || strings.HasPrefix(stem, "LPT")) && stem[3] >= '0' && stem[3] <= '9') ||
-			strings.HasPrefix(stem, "COM¹") || strings.HasPrefix(stem, "COM²") || strings.HasPrefix(stem, "COM³") ||
-			strings.HasPrefix(stem, "LPT¹") || strings.HasPrefix(stem, "LPT²") || strings.HasPrefix(stem, "LPT³") {
+		if !winpath.ValidComponent(part) {
 			return nil, errUnsafePath
 		}
 	}
