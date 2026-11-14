@@ -75,7 +75,7 @@ func (s *AccountStore) PutFile(ctx context.Context, names []string, data []byte,
 		return files.Node{}, false, files.ErrUnavailable
 	}
 	defer tx.Rollback()
-	parent, parentPath, err := lookupCollection(ctx, tx, names[:len(names)-1])
+	parent, parentPath, err := lookupNode(ctx, tx, names[:len(names)-1])
 	if errors.Is(err, files.ErrMissing) || parent.File {
 		return files.Node{}, false, files.ErrParentMissing
 	}
@@ -90,7 +90,7 @@ func (s *AccountStore) PutFile(ctx context.Context, names []string, data []byte,
 	if _, err = files.Components(path); err != nil {
 		return files.Node{}, false, err
 	}
-	node, _, err := lookupCollection(ctx, tx, names)
+	node, _, err := lookupNode(ctx, tx, names)
 	created := errors.Is(err, files.ErrMissing)
 	if err != nil && !created {
 		return files.Node{}, false, err
@@ -146,7 +146,7 @@ func (s *AccountStore) ReadFile(ctx context.Context, names []string) (files.Snap
 		return files.Snapshot{}, nil, err
 	}
 	defer s.release()
-	node, path, err := lookupCollection(ctx, s.conn, names)
+	node, path, err := lookupNode(ctx, s.conn, names)
 	if err != nil {
 		return files.Snapshot{}, nil, err
 	}

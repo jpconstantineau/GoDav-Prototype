@@ -85,7 +85,7 @@ func (s snapshotFS) Stat(_ context.Context, path string) (os.FileInfo, error) {
 	if !ok {
 		return nil, os.ErrNotExist
 	}
-	return collectionInfo{node}, nil
+	return nodeInfo{node}, nil
 }
 func (s snapshotFS) OpenFile(_ context.Context, path string, flag int, _ os.FileMode) (webdav.File, error) {
 	if flag != os.O_RDONLY {
@@ -98,33 +98,33 @@ func (s snapshotFS) OpenFile(_ context.Context, path string, flag int, _ os.File
 	var children []os.FileInfo
 	if root {
 		for _, child := range s.snapshot.Children {
-			children = append(children, collectionInfo{child})
+			children = append(children, nodeInfo{child})
 		}
 	}
-	return &collectionFile{info: collectionInfo{node}, children: children}, nil
+	return &collectionFile{info: nodeInfo{node}, children: children}, nil
 }
 func (snapshotFS) Mkdir(context.Context, string, os.FileMode) error { return os.ErrPermission }
 func (snapshotFS) RemoveAll(context.Context, string) error          { return os.ErrPermission }
 func (snapshotFS) Rename(context.Context, string, string) error     { return os.ErrPermission }
 
-type collectionInfo struct{ node files.Node }
+type nodeInfo struct{ node files.Node }
 
-func (i collectionInfo) Name() string { return i.node.Name }
-func (i collectionInfo) Size() int64  { return i.node.Size }
-func (i collectionInfo) Mode() os.FileMode {
+func (i nodeInfo) Name() string { return i.node.Name }
+func (i nodeInfo) Size() int64  { return i.node.Size }
+func (i nodeInfo) Mode() os.FileMode {
 	if i.node.File {
 		return 0444
 	}
 	return os.ModeDir | 0555
 }
-func (i collectionInfo) ModTime() time.Time                          { return i.node.Modified }
-func (i collectionInfo) IsDir() bool                                 { return !i.node.File }
-func (collectionInfo) Sys() any                                      { return nil }
-func (i collectionInfo) ContentType(context.Context) (string, error) { return i.node.ContentType, nil }
-func (i collectionInfo) ETag(context.Context) (string, error)        { return i.node.ETag, nil }
+func (i nodeInfo) ModTime() time.Time                          { return i.node.Modified }
+func (i nodeInfo) IsDir() bool                                 { return !i.node.File }
+func (nodeInfo) Sys() any                                      { return nil }
+func (i nodeInfo) ContentType(context.Context) (string, error) { return i.node.ContentType, nil }
+func (i nodeInfo) ETag(context.Context) (string, error)        { return i.node.ETag, nil }
 
 type collectionFile struct {
-	info     collectionInfo
+	info     nodeInfo
 	children []os.FileInfo
 	position int
 }

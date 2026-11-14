@@ -28,8 +28,9 @@ func ValidContentType(value string) bool {
 			return false
 		}
 	}
-	_, _, err := mime.ParseMediaType(value)
-	return err == nil
+	kind, _, err := mime.ParseMediaType(value)
+	// ParseMediaType also accepts bare Content-Disposition tokens.
+	return err == nil && strings.Contains(kind, "/")
 }
 
 func (s *Service) reserve(size int64) bool {

@@ -87,7 +87,7 @@ type namespaceQuery interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func lookupCollection(ctx context.Context, q namespaceQuery, names []string) (files.Node, string, error) {
+func lookupNode(ctx context.Context, q namespaceQuery, names []string) (files.Node, string, error) {
 	var node files.Node
 	var created, modified int64
 	if err := q.QueryRowContext(ctx, `SELECT id,name,created_at,modified_at FROM nodes WHERE id='root'`).Scan(&node.ID, &node.Name, &created, &modified); err != nil {
@@ -133,7 +133,7 @@ func (s *AccountStore) CreateCollection(ctx context.Context, names []string) err
 		return files.ErrUnavailable
 	}
 	defer tx.Rollback()
-	parent, parentPath, err := lookupCollection(ctx, tx, names[:len(names)-1])
+	parent, parentPath, err := lookupNode(ctx, tx, names[:len(names)-1])
 	if errors.Is(err, files.ErrMissing) || parent.File {
 		return files.ErrParentMissing
 	}
@@ -186,7 +186,7 @@ func (s *AccountStore) CollectionSnapshot(ctx context.Context, names []string, c
 		return snapshot, err
 	}
 	defer s.release()
-	node, path, err := lookupCollection(ctx, s.conn, names)
+	node, path, err := lookupNode(ctx, s.conn, names)
 	if err != nil {
 		return snapshot, err
 	}

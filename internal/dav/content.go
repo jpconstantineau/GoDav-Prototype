@@ -111,12 +111,33 @@ func readFile(w http.ResponseWriter, r *http.Request, service *files.Service, pa
 	w.Header().Set("ETag", snapshot.Node.ETag)
 	ifRange := r.Header.Get("If-Range")
 	weakDateRange := ifRange != "" && !strings.HasPrefix(ifRange, `"`) && !strings.HasPrefix(ifRange, `W/"`)
-	if values := r.Header.Values("Range"); r.Method == "HEAD" || weakDateRange || len(values) != 1 || !strings.HasPrefix(values[0], "bytes=") || strings.Contains(values[0], ",") {
+	if values := r.Header.Values("Range"); r.Method == "HEAD" || snapshot.Node.Size == 0 || weakDateRange || len(values) != 1 || !strings.HasPrefix(values[0], "bytes=") || strings.Contains(values[0], ",") {
 		r = r.Clone(r.Context())
 		r.Header.Del("Range")
 		r.Header.Del("If-Range")
+	} else if invalidSingleRange(strings.TrimPrefix(values[0], "bytes=")) {
+		// Keep ServeContent's conditional-request precedence, but normalize
+		// syntax it tolerates (empty ranges and zero suffixes) to its 416 path.
+		r = r.Clone(r.Context())
+		r.Header.Set("Range", "bytes=invalid")
 	}
 	http.ServeContent(w, r, snapshot.Node.Name, snapshot.Node.Modified, content)
+}
+
+func invalidSingleRange(value string) bool {
+	first, last, ok := strings.Cut(value, "-")
+	first, last = strings.TrimSpace(first), strings.TrimSpace(last)
+	if !ok || (first == "" && strings.Trim(last, "0") == "") {
+		return true
+	}
+	for _, part := range []string{first, last} {
+		for _, digit := range part {
+			if digit < '0' || digit > '9' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hasReadCondition(r *http.Request) bool {

@@ -69,13 +69,12 @@ the server never transforms bytes or silently decodes content.
 Use stdlib ServeContent for GET/HEAD conditions, with stored type and validator.
 Single byte ranges support bounded/open/suffix forms and 206 Content-Range.
 Multiple ranges or unknown units are ignored (full 200); malformed/unsatisfiable
-single ranges are 416 for nonempty files. Empty-file ranges use stdlib's full 200.
+single ranges are 416 for nonempty files. Empty-file ranges are ignored (full 200).
 Range is ignored for HEAD. If-Range mismatch produces a full response. Date
 If-Range is conservatively a full response because second-resolution stored
 times do not establish a strong validator. Conditional 304/412 reads use metadata
 without content; when a body is needed its complete snapshot is checked again.
-Date
-validators retain HTTP second precision; ETags distinguish rapid changes.
+Date validators retain HTTP second precision; ETags distinguish rapid changes.
 
 Until #7/#8, PUT with If-Match, If-None-Match, If-Modified-Since,
 If-Unmodified-Since, If-Range, DAV If or Lock-Token returns 501 without mutation.

@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"os"
@@ -196,7 +198,7 @@ func TestFilesConfiguredAbsoluteLimit(t *testing.T) {
 
 func TestFilesActualSizeBoundaries(t *testing.T) {
 	bin := development(t)
-	for _, capBytes := range []int{7, 33554432} {
+	for _, capBytes := range []int{7, 33554432, 67108864} {
 		t.Run(fmt.Sprint(capBytes), func(t *testing.T) {
 			f := newServerFixture(t, bin)
 			config, err := os.ReadFile(f.config)
@@ -394,10 +396,10 @@ func TestFilesRangesConditionsAndUnsupportedWrites(t *testing.T) {
 			t.Fatalf("range %s %s returned %d length %s", tc.method, tc.rangeValue, code, h.Get("Content-Length"))
 		}
 	}
-	for _, rangeValue := range []string{"bytes=99-100", "bytes=garbage"} {
+	for _, rangeValue := range []string{"bytes=99-100", "bytes=garbage", "bytes=-0", "bytes=-000", "bytes="} {
 		code, _, _ := fileRequest(t, client, f, "GET", "/dav/data", nil, map[string]string{"Range": rangeValue})
 		if code != 416 {
-			t.Fatal("invalid single range not rejected")
+			t.Fatalf("invalid single range %q returned %d", rangeValue, code)
 		}
 	}
 	for _, method := range []string{"GET", "HEAD"} {
@@ -547,7 +549,7 @@ func TestFilesMetadataDoesNotLoadPayload(t *testing.T) {
 		t.Fatal("HEAD required content load")
 	}
 	code, _, body = fileRequest(t, client, f, "PROPFIND", "/dav/", nil, map[string]string{"Depth": "1"})
-	if code != 207 || !bytes.Contains(body, []byte("<D:getcontentlength>13</D:getcontentlength>")) {
+	if code != 207 || fileListingMetadata(t, body)["/dav/content"][1] != "13" {
 		t.Fatal("PROPFIND required content load or lost length")
 	}
 	code, _, _ = fileRequest(t, client, f, "GET", "/dav/content", nil, nil)
@@ -831,6 +833,7 @@ func TestFilesRefuseMalformedContentWithoutRepair(t *testing.T) {
 		`DROP TABLE file_contents`,
 		`PRAGMA ignore_check_constraints=ON; UPDATE file_contents SET size=size+1`,
 		`UPDATE file_contents SET content_type='not a media type'`,
+		`UPDATE file_contents SET content_type='attachment'`,
 		`UPDATE file_contents SET etag='"gggggggggggggggggggggggggggggggg"'`,
 		`INSERT INTO nodes SELECT 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',id,'Child','CHILD',1,1 FROM nodes WHERE name='data'`,
 		`PRAGMA foreign_keys=OFF; DELETE FROM nodes WHERE name='data'`,
@@ -916,5 +919,182 @@ func TestFilesInProcessConcurrentSnapshots(t *testing.T) {
 	}
 	if got := namespaceListing(t, client, f, "/dav/", "1"); len(got) != 2 {
 		t.Fatal("racing saves duplicated resource")
+	}
+}
+
+func TestFilesReviewedRepresentationEdges(t *testing.T) {
+	f, client, _ := liveFiles(t, 32<<20)
+	for path, body := range map[string]string{"/dav/full": "0123456789", "/dav/empty": ""} {
+		if code, _, _ := fileRequest(t, client, f, "PUT", path, strings.NewReader(body), nil); code != 201 {
+			t.Fatal("seed failed")
+		}
+	}
+	_, before, _ := fileRequest(t, client, f, "HEAD", "/dav/full", nil, nil)
+	for _, kind := range []string{"attachment", "text", "application; charset=utf-8"} {
+		t.Run(kind, func(t *testing.T) {
+			code, _, _ := fileRequest(t, client, f, "PUT", "/dav/full", strings.NewReader("changed"), map[string]string{"Content-Type": kind})
+			if code != 400 {
+				t.Fatalf("invalid media type accepted: %d", code)
+			}
+			code, h, body := fileRequest(t, client, f, "GET", "/dav/full", nil, nil)
+			if code != 200 || string(body) != "0123456789" || h.Get("ETag") != before.Get("ETag") {
+				t.Fatal("invalid media type changed state")
+			}
+		})
+	}
+	for _, path := range []string{"/dav/full", "/dav/empty"} {
+		for _, value := range []string{"bytes=", "bytes=-0", "bytes=-000", "bytes=-+0", "bytes=+0-1", "bytes=-2", "bytes=0-1", "bytes=garbage"} {
+			t.Run(path+value, func(t *testing.T) {
+				want := 416
+				if path == "/dav/empty" {
+					want = 200
+				} else if value == "bytes=-2" || value == "bytes=0-1" {
+					want = 206
+				}
+				code, h, body := fileRequest(t, client, f, "GET", path, nil, map[string]string{"Range": value})
+				if code != want || (path == "/dav/empty" && (len(body) != 0 || h.Get("Content-Range") != "")) {
+					t.Fatalf("range returned %d, want %d", code, want)
+				}
+			})
+		}
+	}
+	// Read preconditions have precedence over range syntax, including the edge profile.
+	for _, value := range []string{"bytes=", "bytes=-0"} {
+		for _, condition := range []struct {
+			header, value string
+			status        int
+		}{{"If-None-Match", before.Get("ETag"), 304}, {"If-Match", `"missing"`, 412}, {"If-Range", `"missing"`, 200}} {
+			code, _, _ := fileRequest(t, client, f, "GET", "/dav/full", nil, map[string]string{"Range": value, condition.header: condition.value})
+			if code != condition.status {
+				t.Errorf("range changed condition precedence: %d", code)
+			}
+		}
+	}
+}
+
+func TestFilesInProcessPausedReaderAllowsSave(t *testing.T) {
+	f, client, _ := liveFiles(t, 64<<20)
+	original := bytes.Repeat([]byte("read snapshot fixture\x00"), (32<<20)/22)
+	code, first, _ := fileRequest(t, client, f, "PUT", "/dav/large", bytes.NewReader(original), nil)
+	if code != 201 {
+		t.Fatal("reader seed failed")
+	}
+	// A small socket receive buffer and an undrained large body keep HTTP output
+	// pending while public requests prove the database is available elsewhere.
+	conn, err := tls.Dial("tcp", strings.TrimPrefix(f.origin, "https://"), &tls.Config{RootCAs: f.roots, ServerName: "localhost", MinVersion: tls.VersionTLS12})
+	if err != nil {
+		t.Fatal("reader fixture TLS failed")
+	}
+	defer conn.Close()
+	if err := conn.NetConn().(*net.TCPConn).SetReadBuffer(128 << 10); err != nil {
+		t.Fatal("reader fixture buffer failed")
+	}
+	conn.SetDeadline(time.Now().Add(8 * time.Second))
+	req, _ := http.NewRequest("GET", f.origin+"/dav/large", nil)
+	req.SetBasicAuth("FixtureUser", f.password)
+	if req.Write(conn) != nil {
+		t.Fatal("reader fixture request failed")
+	}
+	response, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil || response.StatusCode != 200 || response.Header.Get("ETag") != first.Get("ETag") {
+		t.Fatal("reader snapshot headers failed")
+	}
+	defer response.Body.Close()
+	start := time.Now()
+	code, _, _ = fileRequest(t, client, f, "PUT", "/dav/unrelated", strings.NewReader("ok"), nil)
+	if code != 201 || time.Since(start) > 2*time.Second {
+		t.Fatal("slow reader monopolized unrelated save")
+	}
+	code, replacement, _ := fileRequest(t, client, f, "PUT", "/dav/large", strings.NewReader("new snapshot"), nil)
+	if code != 204 || replacement.Get("ETag") == first.Get("ETag") {
+		t.Fatal("snapshot replacement failed")
+	}
+	data, err := io.ReadAll(response.Body)
+	if err != nil || !bytes.Equal(data, original) {
+		t.Fatal("paused reader did not retain its whole committed version")
+	}
+	code, h, data := fileRequest(t, client, f, "GET", "/dav/large", nil, nil)
+	if code != 200 || string(data) != "new snapshot" || h.Get("ETag") != replacement.Get("ETag") {
+		t.Fatal("fresh snapshot differs")
+	}
+	// Both maximum reservations must be available again after network completion.
+	one := pausedFileUpload(t, client, f, "/dav/budget-one")
+	two := pausedFileUpload(t, client, f, "/dav/budget-two")
+	one()
+	two()
+}
+
+func TestFilesCancelledPrecommitPreservesSnapshot(t *testing.T) {
+	bin := development(t)
+	paused := faultBuild(t, "godav_test_pause_file_commit")
+	f := newServerFixture(t, bin)
+	config, err := os.ReadFile(f.config)
+	if err != nil {
+		t.Fatal("cancel fixture config failed")
+	}
+	config = bytes.ReplaceAll(config, []byte("33554432"), []byte("67108864"))
+	if os.WriteFile(f.config, config, 0600) != nil {
+		t.Fatal("cancel fixture config failed")
+	}
+	p := startServer(t, bin, f)
+	client := fixtureClient(f)
+	defer client.CloseIdleConnections()
+	code, _, _ := fileRequest(t, client, f, "PUT", "/dav/old", strings.NewReader("old committed"), nil)
+	if code != 201 {
+		t.Fatal("cancel seed failed")
+	}
+	_, _, listing := fileRequest(t, client, f, "PROPFIND", "/dav/", nil, map[string]string{"Depth": "1"})
+	p.stop()
+	client.CloseIdleConnections()
+	p = startServer(t, paused, f)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "PUT", f.origin+"/dav/old", strings.NewReader("fully staged replacement"))
+	req.SetBasicAuth("FixtureUser", f.password)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		response, err := client.Do(req)
+		if err == nil {
+			io.Copy(io.Discard, response.Body)
+			response.Body.Close()
+		}
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(p.logs.String(), "test-only file publication pause") && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !strings.Contains(p.logs.String(), "test-only file publication pause") {
+		t.Fatal("fully staged precommit pause not reached")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled request did not stop")
+	}
+	code, _, after := fileRequest(t, client, f, "PROPFIND", "/dav/", nil, map[string]string{"Depth": "1"})
+	if code != 207 || !maps.Equal(fileListingMetadata(t, listing), fileListingMetadata(t, after)) {
+		t.Fatal("cancelled precommit changed metadata")
+	}
+	code, _, data := fileRequest(t, client, f, "GET", "/dav/old", nil, nil)
+	if code != 200 || string(data) != "old committed" {
+		t.Fatal("cancelled precommit changed bytes")
+	}
+	one := pausedFileUpload(t, client, f, "/dav/one")
+	two := pausedFileUpload(t, client, f, "/dav/two")
+	one()
+	two()
+	p.stop()
+	client.CloseIdleConnections()
+	p = startServer(t, bin, f)
+	defer p.stop()
+	code, _, data = fileRequest(t, client, f, "GET", "/dav/old", nil, nil)
+	if code != 200 || string(data) != "old committed" {
+		t.Fatal("cancelled save survived reopen")
+	}
+	code, _, _ = fileRequest(t, client, f, "PUT", "/dav/after", strings.NewReader("ok"), nil)
+	if code != 201 {
+		t.Fatal("cancelled precommit left store unusable")
 	}
 }
