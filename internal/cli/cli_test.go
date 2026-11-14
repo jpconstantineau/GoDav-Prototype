@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const help = "Usage: godav <command>\n\nCommands:\n  init config [--config <path>] --username <name>  Initialize privately (default: godav.yaml)\n  version  Show build identity\n  help     Show this help\n"
+const help = "Usage: godav <command>\n\nCommands:\n  init config [--config <path>] --username <name>  Initialize privately (default: godav.yaml)\n  run server --config <path>  Serve an initialized HTTPS share\n  version  Show build identity\n  help     Show this help\n"
 
 func TestHelpDoesNotBootstrap(t *testing.T) {
 	bin := development(t)
@@ -34,7 +34,7 @@ func TestHelpDoesNotBootstrap(t *testing.T) {
 
 func TestInvalidCommand(t *testing.T) {
 	bin := development(t)
-	for _, args := range [][]string{{"bogus"}, {"version", "extra"}, {"help", "extra"}, {"--version"}, {"VERSION"}, {"run", "server"}} {
+	for _, args := range [][]string{{"bogus"}, {"version", "extra"}, {"help", "extra"}, {"--version"}, {"VERSION"}} {
 		out, err, code := command(t, t.TempDir(), bin, args...)
 		if code != 2 || out != "" || err != "godav: invalid command\n"+help {
 			t.Fatalf("args=%v exit=%d stdout=%q stderr=%q", args, code, out, err)
