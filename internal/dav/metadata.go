@@ -60,7 +60,7 @@ func protectedProperty(name xml.Name) bool {
 
 // Decode one complete bounded document before any operation gate is acquired.
 func parsePropertyPatch(body []byte) ([]propertyChange, int) {
-	d := xml.NewDecoder(bytes.NewReader(body))
+	d := xml.NewTokenDecoder(&namespaceTokens{decoder: xml.NewDecoder(bytes.NewReader(body))})
 	var stack []xml.Name
 	var changes []propertyChange
 	elements, roots, aggregate := 0, 0, 0

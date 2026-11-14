@@ -54,12 +54,13 @@ func TestMetadataWindowsStringsPersist(t *testing.T) {
 		t.Fatal("seed failed")
 	}
 	patch := `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:"><d:set><d:prop><z:Win32CreationTime>A &amp; B</z:Win32CreationTime><z:Win32LastModifiedTime>opaque modified</z:Win32LastModifiedTime><z:Win32LastAccessTime></z:Win32LastAccessTime><z:Win32FileAttributes>00000020</z:Win32FileAttributes></d:prop></d:set></d:propertyupdate>`
-	code, _, data := fileRequest(t, c, f, "PROPPATCH", "/dav/meta", strings.NewReader(patch), nil)
+	code, _, data := metadataPatch(t, c, f, "/dav/meta", strings.NewReader(patch), nil, "Win32CreationTime", "Win32LastModifiedTime", "Win32LastAccessTime", "Win32FileAttributes")
 	if code != 207 || !strings.Contains(string(data), "200 OK") {
 		p.stop()
 		t.Fatalf("supported patch failed: %d", code)
 	}
 	check := func() {
+		assertStoredMetadata(t, c, f, "/dav/meta", map[string]string{"Win32CreationTime": "A & B", "Win32LastModifiedTime": "opaque modified", "Win32LastAccessTime": "", "Win32FileAttributes": "00000020"})
 		t.Helper()
 		code, _, data := fileRequest(t, c, f, "PROPFIND", "/dav/meta", strings.NewReader(`<d:propfind xmlns:d="DAV:" xmlns:x="urn:schemas-microsoft-com:"><d:prop><x:Win32CreationTime/><x:Win32LastModifiedTime/><x:Win32LastAccessTime/><x:Win32FileAttributes/></d:prop></d:propfind>`), map[string]string{"Depth": "0"})
 		if code != 207 || strings.Contains(string(data), "404 Not Found") || !strings.Contains(string(data), "A &amp; B") || !strings.Contains(string(data), "opaque modified") || !strings.Contains(string(data), "00000020") {
@@ -115,12 +116,12 @@ func TestMetadataAtomicPatchConditions(t *testing.T) {
 	if code != 200 || h.Get("ETag") != tag {
 		t.Fatal("stale patch changed tag")
 	}
-	code, h, _ = fileRequest(t, c, f, "PROPPATCH", "/dav/meta", strings.NewReader(patch), map[string]string{"If-Match": tag})
+	code, h, _ = metadataPatch(t, c, f, "/dav/meta", strings.NewReader(patch), map[string]string{"If-Match": tag}, "Win32FileAttributes")
 	if code != 207 || h.Get("ETag") == tag {
 		t.Fatal("matching patch failed to rotate tag")
 	}
 	tag = h.Get("ETag")
-	code, h, _ = fileRequest(t, c, f, "PROPPATCH", "/dav/meta", strings.NewReader(patch), nil)
+	code, h, _ = metadataPatch(t, c, f, "/dav/meta", strings.NewReader(patch), nil, "Win32FileAttributes")
 	if code != 207 || h.Get("ETag") != tag {
 		t.Fatal("no-op patch rotated tag")
 	}
@@ -181,10 +182,11 @@ func TestMetadataCollectionConditions(t *testing.T) {
 		t.Fatal("absent collection creation rejected")
 	}
 	patch := `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:"><d:set><d:prop><z:Win32FileAttributes>10</z:Win32FileAttributes></d:prop></d:set></d:propertyupdate>`
-	code, h, _ := fileRequest(t, c, f, "PROPPATCH", "/dav/new/", strings.NewReader(patch), map[string]string{"If-Match": "*"})
+	code, h, _ := metadataPatch(t, c, f, "/dav/new/", strings.NewReader(patch), map[string]string{"If-Match": "*"}, "Win32FileAttributes")
 	if code != 207 || h.Get("ETag") != "" {
 		t.Fatal("collection wildcard/etag contract failed")
 	}
+	assertStoredMetadata(t, c, f, "/dav/new/", map[string]string{"Win32FileAttributes": "10"})
 	code, _, _ = fileRequest(t, c, f, "PROPPATCH", "/dav/new/", strings.NewReader(patch), map[string]string{"If-Match": `"token"`})
 	if code != 412 {
 		t.Fatal("collection matched file tag")
@@ -202,7 +204,7 @@ func TestMetadataExtensionsAndTrailingSlash(t *testing.T) {
 		t.Fatal("seed failed")
 	}
 	patch := `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:" xmlns:x="urn:extension" x:hint="ignore"><x:ignored><d:remove><d:prop><z:Win32CreationTime/></d:prop></d:remove></x:ignored><d:set x:hint="ignore"><x:ignored/><d:prop><z:Win32CreationTime>kept</z:Win32CreationTime></d:prop></d:set></d:propertyupdate>`
-	code, _, data := fileRequest(t, c, f, "PROPPATCH", "/dav/meta", strings.NewReader(patch), nil)
+	code, _, data := metadataPatch(t, c, f, "/dav/meta", strings.NewReader(patch), nil, "Win32CreationTime")
 	if code != 207 || strings.Count(string(data), "200 OK") != 1 {
 		t.Fatalf("extension subtree not safely ignored: %d", code)
 	}
@@ -224,13 +226,17 @@ func TestMetadataOrderedOperationsAndRejectionBounds(t *testing.T) {
 	}
 	set := `<d:set><d:prop><z:Win32CreationTime>temporary</z:Win32CreationTime></d:prop></d:set>`
 	remove := `<d:remove><d:prop><z:Win32CreationTime/></d:prop></d:remove>`
-	for _, body := range []string{wrap(remove), wrap(set + remove)} {
-		code, h, _ = fileRequest(t, c, f, "PROPPATCH", "/dav/order", strings.NewReader(body), nil)
+	for i, body := range []string{wrap(remove), wrap(set + remove)} {
+		names := []string{"Win32CreationTime"}
+		if i == 1 {
+			names = append(names, "Win32CreationTime")
+		}
+		code, h, _ = metadataPatch(t, c, f, "/dav/order", strings.NewReader(body), nil, names...)
 		if code != 207 || h.Get("ETag") != tag {
 			t.Fatal("final-state no-op changed tag")
 		}
 	}
-	code, h, _ = fileRequest(t, c, f, "PROPPATCH", "/dav/order", strings.NewReader(wrap(remove+set)), nil)
+	code, h, _ = metadataPatch(t, c, f, "/dav/order", strings.NewReader(wrap(remove+set)), nil, "Win32CreationTime", "Win32CreationTime")
 	if code != 207 || h.Get("ETag") == tag {
 		t.Fatal("operation order lost")
 	}
@@ -296,7 +302,7 @@ func TestMetadataConditionsAtPublication(t *testing.T) {
 		t.Fatal("staging failed")
 	}
 	patch := `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:"><d:set><d:prop><z:Win32CreationTime>new version</z:Win32CreationTime></d:prop></d:set></d:propertyupdate>`
-	code, h, _ = fileRequest(t, c, f, "PROPPATCH", "/dav/slow", strings.NewReader(patch), map[string]string{"If-Match": tag})
+	code, h, _ = metadataPatch(t, c, f, "/dav/slow", strings.NewReader(patch), map[string]string{"If-Match": tag}, "Win32CreationTime")
 	if code != 207 {
 		t.Fatalf("concurrent metadata patch got %d", code)
 	}
@@ -383,7 +389,7 @@ func TestMetadataRefusesMalformedV4(t *testing.T) {
 			p := startServer(t, bin, f)
 			c := fixtureClient(f)
 			patch := `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:"><d:set><d:prop><z:Win32CreationTime>seed</z:Win32CreationTime></d:prop></d:set></d:propertyupdate>`
-			code, _, _ := fileRequest(t, c, f, "PROPPATCH", "/dav/", strings.NewReader(patch), nil)
+			code, _, _ := metadataPatch(t, c, f, "/dav/", strings.NewReader(patch), nil, "Win32CreationTime")
 			if code != 207 {
 				t.Fatal("metadata seed failed")
 			}
@@ -420,7 +426,12 @@ func TestMetadataConcurrentPatchExpectation(t *testing.T) {
 	}
 	tag := h.Get("ETag")
 	start := make(chan struct{})
-	results := make(chan int, 2)
+	type outcome struct {
+		code  int
+		data  []byte
+		value string
+	}
+	results := make(chan outcome, 2)
 	for _, value := range []string{"first", "second"} {
 		go func() {
 			<-start
@@ -432,25 +443,34 @@ func TestMetadataConcurrentPatchExpectation(t *testing.T) {
 				req.Header.Set("If-Match", tag)
 				resp, err := c.Do(req)
 				if err != nil {
-					results <- 0
+					results <- outcome{}
 					return
 				}
 				code := resp.StatusCode
-				io.Copy(io.Discard, resp.Body)
+				payload, readErr := io.ReadAll(resp.Body)
+				if readErr != nil {
+					code = 0
+				}
 				resp.Body.Close()
 				if code == 503 && time.Now().Before(deadline) {
 					time.Sleep(10 * time.Millisecond)
 					continue
 				}
-				results <- code
+				results <- outcome{code: code, data: payload, value: value}
 				return
 			}
 		}()
 	}
 	close(start)
 	a, b := <-results, <-results
-	if !(a == 207 && b == 412 || a == 412 && b == 207) {
-		t.Fatalf("competing expectations got %d/%d", a, b)
+	if !(a.code == 207 && b.code == 412 || a.code == 412 && b.code == 207) {
+		t.Fatalf("competing expectations got %d/%d", a.code, b.code)
+	}
+	for _, result := range []outcome{a, b} {
+		if result.code == 207 {
+			assertMetadataPatchOK(t, result.code, result.data, "Win32CreationTime")
+			assertStoredMetadata(t, c, f, "/dav/race", map[string]string{"Win32CreationTime": result.value})
+		}
 	}
 	code, h, data := fileRequest(t, c, f, "GET", "/dav/race", nil, nil)
 	if code != 200 || h.Get("ETag") == tag || string(data) != "bytes" {
@@ -556,7 +576,7 @@ func TestMetadataV3UpgradeAndOfflineAccounts(t *testing.T) {
 		t.Fatal("v3 upgrade changed representation")
 	}
 	patch := `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:"><d:set><d:prop><z:Win32CreationTime>offline preserved</z:Win32CreationTime></d:prop></d:set></d:propertyupdate>`
-	code, h, _ = fileRequest(t, c, f, "PROPPATCH", "/dav/kept", strings.NewReader(patch), nil)
+	code, h, _ = metadataPatch(t, c, f, "/dav/kept", strings.NewReader(patch), nil, "Win32CreationTime")
 	if code != 207 {
 		t.Fatal("v4 metadata unavailable")
 	}
@@ -644,8 +664,205 @@ func TestMetadataXMLDeclarations(t *testing.T) {
 			t.Fatalf("invalid XML declaration got %d", code)
 		}
 	}
-	code, _, _ := fileRequest(t, c, f, "PROPPATCH", "/dav/", strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?>`+body), nil)
+	code, _, _ := metadataPatch(t, c, f, "/dav/", strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?>`+body), nil, "Win32CreationTime")
 	if code != 207 {
 		t.Fatal("valid declaration rejected")
+	}
+}
+
+func TestMetadataRejectsUnboundNamespacesAtomically(t *testing.T) {
+	f, c, _ := liveFiles(t, 1024)
+	code, _, _ := fileRequest(t, c, f, "PUT", "/dav/namespaces", strings.NewReader("bytes"), nil)
+	if code != 201 {
+		t.Fatal("seed failed")
+	}
+	wrap := func(attrs, inside string) string {
+		return `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:" ` + attrs + `>` + inside + `</d:propertyupdate>`
+	}
+	set := func(value string) string {
+		return `<d:set><d:prop><z:Win32CreationTime>` + value + `</z:Win32CreationTime></d:prop></d:set>`
+	}
+	code, h, data := metadataPatch(t, c, f, "/dav/namespaces", strings.NewReader(wrap("", set("kept"))), nil, "Win32CreationTime")
+	if code != 207 || !strings.Contains(string(data), "200 OK") {
+		t.Fatal("metadata seed failed")
+	}
+	tag := h.Get("ETag")
+	invalid := []string{
+		wrap("", set("changed")+`<x:ignored/>`),
+		wrap(`x:hint="bad"`, set("changed")),
+		wrap(`xmlns:e="urn:extension"`, set("changed")+`<e:ignored><x:nested/></e:ignored>`),
+		wrap(`xmlns:e="urn:extension"`, set("changed")+`<e:ignored><e:nested x:hint="bad"/></e:ignored>`),
+		wrap(`xmlns:xml="urn:wrong"`, set("changed")),
+		wrap(`xmlns:e="http://www.w3.org/XML/1998/namespace"`, set("changed")),
+		wrap(`xmlns:xmlns="http://www.w3.org/2000/xmlns/"`, set("changed")),
+		wrap(`xmlns:e="http://www.w3.org/2000/xmlns/"`, set("changed")),
+		wrap(`xmlns:e=""`, set("changed")),
+		wrap(`xmlns="http://www.w3.org/XML/1998/namespace"`, set("changed")),
+		wrap(`xmlns:e="urn:extension"`, set("changed")+`<e:1invalid/>`),
+	}
+	for i, body := range invalid {
+		code, _, _ = fileRequest(t, c, f, "PROPPATCH", "/dav/namespaces", strings.NewReader(body), nil)
+		if code != 400 {
+			t.Fatalf("namespace case %d got %d", i, code)
+		}
+		code, h, _ = fileRequest(t, c, f, "HEAD", "/dav/namespaces", nil, nil)
+		if code != 200 || h.Get("ETag") != tag {
+			t.Fatal("malformed namespace changed tag")
+		}
+		code, _, data = fileRequest(t, c, f, "PROPFIND", "/dav/namespaces", nil, map[string]string{"Depth": "0"})
+		if code != 207 || !strings.Contains(string(data), ">kept<") {
+			t.Fatal("malformed namespace changed property")
+		}
+	}
+}
+
+// Success means every requested expanded property succeeded, not just outer207.
+func assertMetadataPatchOK(t *testing.T, code int, data []byte, names ...string) {
+	t.Helper()
+	if code != 207 {
+		t.Fatalf("metadata patch status %d", code)
+	}
+	var doc metadataReply
+	if xml.Unmarshal(data, &doc) != nil || len(doc.Responses) != 1 {
+		t.Fatal("patch multistatus invalid")
+	}
+	want := map[xml.Name]int{}
+	for _, name := range names {
+		want[xml.Name{Space: "urn:schemas-microsoft-com:", Local: name}]++
+	}
+	for _, stat := range doc.Responses[0].Stats {
+		if stat.Status != "HTTP/1.1 200 OK" || stat.Error != nil || len(stat.Prop.Values) == 0 {
+			t.Fatal("patch contained a property failure")
+		}
+		for _, p := range stat.Prop.Values {
+			if want[p.XMLName] == 0 || p.Text != "" {
+				t.Fatal("patch property namespace/count/value differs")
+			}
+			want[p.XMLName]--
+		}
+	}
+	for _, count := range want {
+		if count != 0 {
+			t.Fatal("patch omitted requested property")
+		}
+	}
+}
+
+type metadataReply struct {
+	Responses []struct {
+		Stats []struct {
+			Status string    `xml:"DAV: status"`
+			Error  *struct{} `xml:"DAV: error"`
+			Prop   struct {
+				Values []struct {
+					XMLName xml.Name
+					Text    string `xml:",chardata"`
+				} `xml:",any"`
+			} `xml:"DAV: prop"`
+		} `xml:"DAV: propstat"`
+	} `xml:"DAV: response"`
+}
+
+func metadataPatch(t *testing.T, c *http.Client, f serverFixture, path string, body io.Reader, headers map[string]string, names ...string) (int, http.Header, []byte) {
+	t.Helper()
+	code, h, data := fileRequest(t, c, f, "PROPPATCH", path, body, headers)
+	assertMetadataPatchOK(t, code, data, names...)
+	return code, h, data
+}
+func assertStoredMetadata(t *testing.T, c *http.Client, f serverFixture, path string, want map[string]string) {
+	t.Helper()
+	var body strings.Builder
+	body.WriteString(`<d:propfind xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:"><d:prop>`)
+	for name := range want {
+		body.WriteString("<z:" + name + "/>")
+	}
+	body.WriteString(`</d:prop></d:propfind>`)
+	code, _, data := fileRequest(t, c, f, "PROPFIND", path, strings.NewReader(body.String()), map[string]string{"Depth": "0"})
+	var doc metadataReply
+	if code != 207 || xml.Unmarshal(data, &doc) != nil || len(doc.Responses) != 1 {
+		t.Fatal("metadata readback invalid")
+	}
+	seen := map[string]bool{}
+	for _, stat := range doc.Responses[0].Stats {
+		if stat.Status != "HTTP/1.1 200 OK" || stat.Error != nil {
+			t.Fatal("stored metadata property failed")
+		}
+		for _, p := range stat.Prop.Values {
+			value, ok := want[p.XMLName.Local]
+			if p.XMLName.Space != "urn:schemas-microsoft-com:" || !ok || seen[p.XMLName.Local] || value != p.Text {
+				t.Fatal("stored metadata QName/value differs")
+			}
+			seen[p.XMLName.Local] = true
+		}
+	}
+	if len(seen) != len(want) {
+		t.Fatal("stored metadata omitted property")
+	}
+}
+
+func TestMetadataValidNamespaceScopesAndBounds(t *testing.T) {
+	f, c, _ := liveFiles(t, 1024)
+	value := strings.Repeat("v", 4096)
+	names := []string{"Win32CreationTime", "Win32LastModifiedTime", "Win32LastAccessTime", "Win32FileAttributes"}
+	want := map[string]string{}
+	var props strings.Builder
+	for _, name := range names {
+		props.WriteString("<z:" + name + ">" + value + "</z:" + name + ">")
+		want[name] = value
+	}
+	prefix := `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:" xmlns:e="urn:extension" xmlns:xml="http://www.w3.org/XML/1998/namespace"><e:ignored xmlns:z="urn:shadow"><z:bound xml:lang="en"/></e:ignored>`
+	body := prefix + `<d:set><d:prop>` + props.String() + `</d:prop></d:set></d:propertyupdate>`
+	metadataPatch(t, c, f, "/dav/", strings.NewReader(body), nil, names...)
+	assertStoredMetadata(t, c, f, "/dav/", want)
+	body = prefix + `<d:set><d:prop>` + props.String() + `<z:Win32CreationTime>x</z:Win32CreationTime></d:prop></d:set></d:propertyupdate>`
+	code, _, _ := fileRequest(t, c, f, "PROPPATCH", "/dav/", strings.NewReader(body), nil)
+	if code != 413 {
+		t.Fatal("aggregate decoded value limit not enforced")
+	}
+	assertStoredMetadata(t, c, f, "/dav/", want)
+	var operations strings.Builder
+	var repeated []string
+	for range 64 {
+		operations.WriteString(`<d:remove><d:prop><z:Win32CreationTime/></d:prop></d:remove>`)
+		repeated = append(repeated, "Win32CreationTime")
+	}
+	metadataPatch(t, c, f, "/dav/", strings.NewReader(prefix+operations.String()+`</d:propertyupdate>`), nil, repeated...)
+}
+
+func TestMetadataRemovePersists(t *testing.T) {
+	bin := development(t)
+	f := newServerFixture(t, bin)
+	p := startServer(t, bin, f)
+	c := fixtureClient(f)
+	defer c.CloseIdleConnections()
+	code, _, _ := fileRequest(t, c, f, "PUT", "/dav/remove", strings.NewReader("bytes"), nil)
+	if code != 201 {
+		t.Fatal("seed failed")
+	}
+	set := `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:"><d:set><d:prop><z:Win32CreationTime>remove me</z:Win32CreationTime></d:prop></d:set></d:propertyupdate>`
+	_, h, _ := metadataPatch(t, c, f, "/dav/remove", strings.NewReader(set), nil, "Win32CreationTime")
+	oldTag := h.Get("ETag")
+	remove := `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:"><d:remove><d:prop><z:Win32CreationTime/></d:prop></d:remove></d:propertyupdate>`
+	_, h, _ = metadataPatch(t, c, f, "/dav/remove", strings.NewReader(remove), nil, "Win32CreationTime")
+	tag := h.Get("ETag")
+	if tag == oldTag {
+		t.Fatal("effective removal did not change tag")
+	}
+	p.stop()
+	p = startServer(t, bin, f)
+	defer p.stop()
+	code, h, data := fileRequest(t, c, f, "GET", "/dav/remove", nil, nil)
+	if code != 200 || h.Get("ETag") != tag || string(data) != "bytes" {
+		t.Fatal("removed metadata changed representation after restart")
+	}
+	body := `<d:propfind xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:"><d:prop><z:Win32CreationTime/></d:prop></d:propfind>`
+	code, _, data = fileRequest(t, c, f, "PROPFIND", "/dav/remove", strings.NewReader(body), map[string]string{"Depth": "0"})
+	var doc metadataReply
+	if code != 207 || xml.Unmarshal(data, &doc) != nil || len(doc.Responses) != 1 || len(doc.Responses[0].Stats) != 1 {
+		t.Fatal("removed property response invalid")
+	}
+	stat := doc.Responses[0].Stats[0]
+	if stat.Status != "HTTP/1.1 404 Not Found" || len(stat.Prop.Values) != 1 || stat.Prop.Values[0].XMLName != (xml.Name{Space: "urn:schemas-microsoft-com:", Local: "Win32CreationTime"}) {
+		t.Fatal("removed property was synthesized or reappeared")
 	}
 }
