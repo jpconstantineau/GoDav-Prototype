@@ -21,6 +21,8 @@ func TestLocksTimeoutAndResourceScope(t *testing.T) {
 		{[]string{"Second-4294967295"}, 201, "Second-3600"},
 		{[]string{"Second-0"}, 201, "Second-1"},
 		{[]string{"Second-5", "Infinite"}, 201, "Second-5"},
+		{[]string{"sEcOnD-5"}, 201, "Second-5"},
+		{[]string{"iNfInItE"}, 201, "Second-3600"},
 		{[]string{"Second-5, bad"}, 400, ""},
 		{[]string{"Second-4294967296"}, 400, ""},
 	} {
@@ -40,6 +42,26 @@ func TestLocksTimeoutAndResourceScope(t *testing.T) {
 		}
 	}
 	token := acquireFixtureLock(t, c, f, "/dav/scope", "0", "Second-60")
+	for _, values := range [][]string{nil, {token, token}} {
+		req, _ := http.NewRequest("UNLOCK", f.origin+"/dav/scope", nil)
+		req.SetBasicAuth("FixtureUser", f.password)
+		for _, value := range values {
+			req.Header.Add("Lock-Token", value)
+		}
+		response, err := c.Do(req)
+		if err != nil {
+			t.Fatal("UNLOCK header validation request failed")
+		}
+		io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+		if response.StatusCode != 400 {
+			t.Fatalf("UNLOCK requires exactly one Lock-Token field: %d", response.StatusCode)
+		}
+		code, _, _ := fileRequest(t, c, f, "PUT", "/dav/scope", strings.NewReader("refused"), nil)
+		if code != 423 {
+			t.Fatalf("invalid UNLOCK changed the active lease: %d", code)
+		}
+	}
 	fileRequest(t, c, f, "PUT", "/dav/other", strings.NewReader("other"), nil)
 	code, _, body := fileRequest(t, c, f, "LOCK", "/dav/other", nil, map[string]string{"If": "(" + token + ")"})
 	if code != 412 || !strings.Contains(string(body), "lock-token-matches-request-uri") {
@@ -128,6 +150,72 @@ func TestLocksOwnerImplicitEmptyNamespace(t *testing.T) {
 	check(data)
 }
 
+func TestLocksOwnerInheritedLanguage(t *testing.T) {
+	f, c, _ := liveFiles(t, 1024)
+	for _, tc := range []struct {
+		name, root, owner, want string
+		present                 bool
+	}{
+		{"inherited", ` xml:lang="fr"`, "", "fr", true},
+		{"override", ` xml:lang="fr"`, ` xml:lang="ja"`, "ja", true},
+		{"reset", ` xml:lang="fr"`, ` xml:lang=""`, "", true},
+		{"inherited-empty", ` xml:lang=""`, "", "", true},
+		{"absent", "", "", "", false},
+	} {
+		body := `<d:lockinfo xmlns:d="DAV:"` + tc.root + `><d:lockscope><d:exclusive/></d:lockscope><d:locktype><d:write/></d:locktype><d:owner` + tc.owner + `>owner<plain xml:lang="de">text</plain></d:owner></d:lockinfo>`
+		path := "/dav/language-" + tc.name
+		code, h, data := fileRequest(t, c, f, "LOCK", path, strings.NewReader(body), map[string]string{"Depth": "iNfInItY"})
+		if code != 201 || !strings.Contains(string(data), "<D:depth>infinity</D:depth>") {
+			t.Fatalf("language %s create: %d", tc.name, code)
+		}
+		check := func(data []byte) {
+			t.Helper()
+			decoder := xml.NewDecoder(strings.NewReader(string(data)))
+			seen, childSeen := false, false
+			for {
+				token, err := decoder.Token()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				start, ok := token.(xml.StartElement)
+				if ok && start.Name == (xml.Name{Local: "plain"}) {
+					for _, a := range start.Attr {
+						if a.Name == (xml.Name{Space: "http://www.w3.org/XML/1998/namespace", Local: "lang"}) && a.Value == "de" {
+							childSeen = true
+						}
+					}
+				}
+				if !ok || start.Name != (xml.Name{Space: "DAV:", Local: "owner"}) {
+					continue
+				}
+				seen = true
+				present, value := false, ""
+				for _, a := range start.Attr {
+					if a.Name == (xml.Name{Space: "http://www.w3.org/XML/1998/namespace", Local: "lang"}) {
+						present, value = true, a.Value
+					}
+				}
+				if present != tc.present || value != tc.want {
+					t.Fatalf("language %s was not preserved", tc.name)
+				}
+			}
+			if !seen || !childSeen {
+				t.Fatal("owner or descendant language absent")
+			}
+		}
+		check(data)
+		code, _, data = fileRequest(t, c, f, "PROPFIND", path, strings.NewReader(`<d:propfind xmlns:d="DAV:"><d:prop><d:lockdiscovery/></d:prop></d:propfind>`), map[string]string{"Depth": "0"})
+		if code != 207 {
+			t.Fatal("language discovery")
+		}
+		check(data)
+		fileRequest(t, c, f, "UNLOCK", path, nil, map[string]string{"Lock-Token": h.Get("Lock-Token")})
+	}
+}
+
 func TestLocksDAVIfConditionsPreserveState(t *testing.T) {
 	f, c, _ := liveFiles(t, 1024)
 	code, h, _ := fileRequest(t, c, f, "PUT", "/dav/conditions", strings.NewReader("unchanged"), nil)
@@ -145,6 +233,11 @@ func TestLocksDAVIfConditionsPreserveState(t *testing.T) {
 		{"missing-token", "(<urn:uuid:missing>)", 412},
 		{"negated-current", "(Not " + token + ")", 412},
 		{"negated-no-space", "(Not" + token + ")", 412},
+		{"negated-mixed-case", "(nOt " + token + ")", 412},
+		{"opaque-token-case", "(" + strings.ToUpper(token) + ")", 412},
+		{"negated-etag-mixed-case", "(" + token + ` NOT["different"])`, 207},
+		{"etag-value-case", "(" + token + " [" + strings.ToUpper(tag) + "])", 412},
+		{"invalid-negation-suffix", "(NotX " + token + ")", 400},
 		{"etag-only-locked", "([" + tag + "])", 423},
 		{"conjunction-current", "(" + token + " [" + tag + "])", 207},
 		{"conjunction-stale", "(" + token + ` ["stale"])`, 412},
@@ -168,6 +261,9 @@ func TestLocksDAVIfConditionsPreserveState(t *testing.T) {
 		{"too-many-bytes", "(<urn:uuid:" + strings.Repeat("a", 8192) + ">)", 431},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "etag-value-case" && strings.ToUpper(tag) == tag {
+				t.Skip("random fixture entity tag has no cased characters")
+			}
 			code, _, _ = fileRequest(t, c, f, "PROPPATCH", "/dav/conditions", strings.NewReader(noop), map[string]string{"If": tc.value})
 			if code != tc.want {
 				t.Fatalf("condition status=%d want=%d", code, tc.want)
@@ -224,6 +320,7 @@ func TestLocksXMLCompleteAndOwnerNamespaces(t *testing.T) {
 		{"unbound", strings.Replace(lockRequestXML, "synthetic-owner", "<z:owner/>", 1), 400},
 		{"invalid-binding", strings.Replace(lockRequestXML, `xmlns:d="DAV:"`, `xmlns:d="DAV:" xmlns:xml="urn:wrong"`, 1), 400},
 		{"wrong-root", strings.ReplaceAll(lockRequestXML, "lockinfo", "other"), 400},
+		{"xml-name-case", strings.ReplaceAll(lockRequestXML, "exclusive", "Exclusive"), 400},
 		{"doctype", `<!DOCTYPE x>` + lockRequestXML, 400},
 		{"owner-cap", strings.Replace(lockRequestXML, "synthetic-owner", strings.Repeat("x", 16385), 1), 413},
 	} {

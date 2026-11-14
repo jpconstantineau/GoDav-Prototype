@@ -56,6 +56,9 @@ One complete If field, at most 8192 bytes, 32 lists and 128 conditions. Duplicat
 fields, empty/mixed tagged/untagged grammar, malformed coded URIs or ETags are
 400; bounds are 431. Validate the whole field before evaluating alternatives.
 AND conditions, OR lists, negation, and weak ETag comparison follow RFC4918.
+The quoted grammar literals Not, infinity, Second- and Infinite accept ASCII
+case variants. Methods, XML names, token identifiers and ETag values are not
+case-folded by these parsers.
 HTTP If-Match retains its existing strong comparison. HTTP and DAV conditions
 are independent requirements; a valid lock token cannot override a false ETag.
 
@@ -81,11 +84,12 @@ through publication; later operations collect expired leases. Cancellation after
 commit cannot undo an already committed outcome.
 
 LOCK XML uses the existing namespace-validation reader: one complete DAV
-lockinfo document, 64 KiB body, depth32, 256 elements, 1024/255-byte namespace/name
-bounds, at most16 KiB self-contained owner markup. DTD and extra documents are
+lockinfo document, 64 KiB body, depth 32, 256 elements, 1024/255-byte namespace/name
+bounds, at most 16 KiB self-contained owner markup. DTD and extra documents are
 rejected. Unknown extensions are ignored by complete subtree, never interpreted
-as hidden lock commands. Owner namespace bindings are retained. Responses are
-bounded to1 MiB and serialization is preflighted before publication. supportedlock
+as hidden lock commands. Owner namespace bindings and inherited xml:lang are
+retained, including explicit local overrides and empty language resets. Responses
+are bounded to 1 MiB and serialization is preflighted before publication. supportedlock
 and lockdiscovery are protected live properties. Upstream's ordinary PROPFIND
 serialization remains in use with detached live lock data supplied by the project.
 

@@ -29,13 +29,13 @@ func lockTimeout(values []string) (time.Duration, error) {
 	for _, part := range strings.Split(strings.Join(values, ","), ",") {
 		part = strings.Trim(part, " \t")
 		var seconds uint64
-		if part == "Infinite" {
+		if protocolLiteral(part, "Infinite") {
 			seconds = 3600
 		} else {
-			if !strings.HasPrefix(part, "Second-") {
+			if len(part) < len("Second-") || !protocolLiteral(part[:len("Second-")], "Second-") {
 				return 0, files.ErrConditionSyntax
 			}
-			digits := strings.TrimPrefix(part, "Second-")
+			digits := part[len("Second-"):]
 			if digits == "" || len(digits) > 10 {
 				return 0, files.ErrConditionSyntax
 			}
@@ -76,6 +76,8 @@ func parseLockInfo(body []byte) (string, int) {
 	ownerStart := -1
 	ownerXML := ""
 	ownerBindings := ""
+	rootLanguage := ""
+	rootLanguagePresent := false
 	decl := false
 	skipDepth := 0
 	for {
@@ -116,6 +118,11 @@ func parseLockInfo(body []byte) (string, int) {
 				continue
 			}
 			if depth == 0 {
+				for _, a := range t.Attr {
+					if a.Name == (xml.Name{Space: xmlNamespace, Local: "lang"}) {
+						rootLanguage, rootLanguagePresent = a.Value, true
+					}
+				}
 				roots++
 				if roots != 1 || t.Name != (xml.Name{Space: "DAV:", Local: "lockinfo"}) {
 					return "", 400
@@ -159,6 +166,13 @@ func parseLockInfo(body []byte) (string, int) {
 						}
 						b.WriteString(`="`)
 						xml.EscapeText(&b, []byte(scope[k]))
+						b.WriteByte('"')
+					}
+					// The owner is detached from lockinfo when stored. Preserve inherited
+					// language, but never replace an explicit value (including an empty reset).
+					if rootLanguagePresent && !attrs[xml.Name{Space: xmlNamespace, Local: "lang"}] {
+						b.WriteString(` xml:lang="`)
+						xml.EscapeText(&b, []byte(rootLanguage))
 						b.WriteByte('"')
 					}
 					ownerBindings = b.String()
@@ -266,7 +280,7 @@ func lockResource(w http.ResponseWriter, r *http.Request, service *files.Service
 		}
 		depth := r.Header.Values("Depth")
 		zero := false
-		if len(depth) > 1 || len(depth) == 1 && depth[0] != "0" && depth[0] != "infinity" {
+		if len(depth) > 1 || len(depth) == 1 && depth[0] != "0" && !protocolLiteral(depth[0], "infinity") {
 			http.Error(w, "Bad Request", 400)
 			return
 		}
@@ -305,6 +319,10 @@ func lockResource(w http.ResponseWriter, r *http.Request, service *files.Service
 }
 func unlockResource(w http.ResponseWriter, r *http.Request, service *files.Service, path string) {
 	values := r.Header.Values("Lock-Token")
+	if len(values) != 1 {
+		http.Error(w, "Bad Request", 400)
+		return
+	}
 	size := len(values) - 1
 	for _, value := range values {
 		size += len(value)

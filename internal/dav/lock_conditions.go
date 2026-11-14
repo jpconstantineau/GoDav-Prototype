@@ -48,7 +48,7 @@ func parseDAVIf(r *http.Request) (files.DAVExpectation, error) {
 			list := files.DAVList{Tagged: tagged, Path: path}
 			for p.i < len(s) && s[p.i] != ')' {
 				c := files.DAVCondition{}
-				if strings.HasPrefix(s[p.i:], "Not") {
+				if len(s)-p.i >= 3 && protocolLiteral(s[p.i:p.i+3], "Not") {
 					p.i += 3
 					if p.i == len(s) || (s[p.i] != ' ' && s[p.i] != '\t' && s[p.i] != '<' && s[p.i] != '[') {
 						return out, files.ErrConditionSyntax
@@ -195,4 +195,25 @@ func ifResourcePath(r *http.Request, raw string) (string, error) {
 		return "", files.ErrConditionSyntax
 	}
 	return strings.Trim(strings.TrimPrefix(path, "/dav"), "/"), nil
+}
+
+// RFC 4918 section 2 imports RFC 2616 section 2.1: quoted protocol
+// grammar literals are ASCII case-insensitive. This is not a data normalizer.
+func protocolLiteral(value, literal string) bool {
+	if len(value) != len(literal) {
+		return false
+	}
+	for i := range value {
+		a, b := value[i], literal[i]
+		if a >= 'A' && a <= 'Z' {
+			a += 'a' - 'A'
+		}
+		if b >= 'A' && b <= 'Z' {
+			b += 'a' - 'A'
+		}
+		if a != b {
+			return false
+		}
+	}
+	return true
 }

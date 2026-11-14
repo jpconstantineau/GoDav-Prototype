@@ -8,9 +8,9 @@ service execution or external network target is part of this slice's tests.
 Chronological development logs are outside the checkout in GoDav-Project-Tools.
 They are evidence for the code at their invocation, not final-head aggregate gates:
 
-- logs/locks08-01-red-explorer.log: reference empty PUT followed by LOCK failed405.
+- logs/locks08-01-red-explorer.log: reference empty PUT followed by LOCK failed 405.
 - logs/locks08-02-explorer.log: complete synthetic sequence and direct save passed.
-- logs/locks08-03-red-collection.log: descendant conflict lacked required207.
+- logs/locks08-03-red-collection.log: descendant conflict lacked required 207.
 - logs/locks08-04-collection.log: hierarchy, membership and discovery passed.
 - logs/locks08-05-conditions-xml.log: full If truth/grammar table, namespace-safe
   owner responses and unchanged snapshots passed. Independent .NET XML reads
@@ -19,11 +19,17 @@ They are evidence for the code at their invocation, not final-head aggregate gat
   both LOCK and PROPFIND responses.
 - logs/locks08-07-capability-regressions.log: then-current lock and discovery
   regressions passed. Older no-lock capability expectations were updated explicitly.
-- logs/locks08-08-scope-red.log: refresh scope returned412 but lacked DAV error code.
-- logs/locks08-09-scope-capacity.log: scope/trailing-slash/timeout and1024-active-lock
+- logs/locks08-08-scope-red.log: refresh scope returned 412 but lacked DAV error code.
+- logs/locks08-09-scope-capacity.log: scope/trailing-slash/timeout and 1024-active-lock
   capacity/reuse coverage passed.
 - logs/locks08-10-concurrent.log: same-resource case-variant creation raced three
-  times, with one201 and one423 each time.
+  times, with one 201 and one 423 each time.
+- logs/locks08-11-full-suite.log: superseded development run. Review corrections
+  overlapped this run, so it is not an immutable exact-head validation result.
+- logs/locks08-16-unlock-validation.log: post-fix absent/duplicate Lock-Token fields
+  returned 400 while preserving the active lease. No pre-fix failure demo was run.
+- logs/locks08-17-reviewed-transport.log: post-fix grammar, language inheritance,
+  owner namespace, token/ETag case and input-completeness coverage passed.
 - locks08-lifecycle-final.log: refresh/expiry, actual CLI restart, principal
   isolation and late-lock-versus-staged-PUT passed together.
 - locks08-lifecycle-controlc-drain.log: actual isolated Ctrl+C drained an admitted
