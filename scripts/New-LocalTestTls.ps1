@@ -125,19 +125,25 @@ public static class GoDavPrivateDirectory {
         Write-NewFile $paths.CertificatePem ([Text.Encoding]::ASCII.GetBytes($certificate.ExportCertificatePem() + "`n"))
         Write-NewFile $paths.PrivateKeyPem ([Text.Encoding]::ASCII.GetBytes($rsa.ExportPkcs8PrivateKeyPem() + "`n"))
         Write-NewFile $paths.PublicCertificateDer ($certificate.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+        # Describe the emitted certificate, not a second copy of its profile.
+        $parsedSan = [Security.Cryptography.X509Certificates.X509SubjectAlternativeNameExtension]::new(
+            $certificate.Extensions['2.5.29.17'].RawData, $false)
+        $constraints = [Security.Cryptography.X509Certificates.X509BasicConstraintsExtension] $certificate.Extensions['2.5.29.19']
+        $usage = [Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] $certificate.Extensions['2.5.29.37']
         $manifest = [ordered]@{
             FormatVersion = 1
             Purpose = 'GoDav local test TLS only; not trusted'
-            Hostname = 'localhost'
-            DnsNames = @('localhost')
-            IpAddresses = @('127.0.0.1', '::1')
+            Hostname = $certificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::DnsName, $false)
+            DnsNames = @($parsedSan.EnumerateDnsNames())
+            IpAddresses = @($parsedSan.EnumerateIPAddresses() | ForEach-Object { $_.ToString() })
             Subject = $certificate.Subject
             Issuer = $certificate.Issuer
-            CertificateAuthority = $false
-            ExtendedKeyUsage = @('1.3.6.1.5.5.7.3.1')
-            KeyAlgorithm = 'RSA'
-            KeySize = 3072
-            SignatureAlgorithm = 'SHA256WithRSA'
+            CertificateAuthority = $constraints.CertificateAuthority
+            ExtendedKeyUsage = @($usage.EnhancedKeyUsages | ForEach-Object { $_.Value })
+            KeyAlgorithm = $certificate.PublicKey.Oid.FriendlyName
+            KeySize = $rsa.KeySize
+            SignatureAlgorithm = $certificate.SignatureAlgorithm.FriendlyName
+            SignatureAlgorithmOid = $certificate.SignatureAlgorithm.Value
             NotBeforeUtc = $certificate.NotBefore.ToUniversalTime().ToString('o')
             NotAfterUtc = $certificate.NotAfter.ToUniversalTime().ToString('o')
             ThumbprintSha1 = $certificate.Thumbprint

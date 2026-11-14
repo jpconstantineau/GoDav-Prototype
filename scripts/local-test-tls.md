@@ -161,3 +161,37 @@ Never delete a computed tree or unrelated data.
 Renewal uses a new directory, newly reviewed public metadata, a successful Go PEM
 load, and separate trust/configuration approval. It never silently overwrites a
 key, extends trust, removes the old entry, or rotates a running server.
+
+## Local verification record (2026-11-14)
+
+Verified on Zen-1000, Windows 10.0.26200, with:
+
+- PowerShell executable:
+  `C:\Users\pierre\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe`
+- PowerShell 7.6.9, .NET 10.0.14; Go 1.25.5 windows/amd64.
+- `Test-LocalTestTls.ps1 -SkipJunctionFixture` passed after the final metadata
+  change. Public-process checks covered owner-only directory/file ACLs; public
+  DER/manifest without private material; exact runtime identity; standalone Go
+  PEM-pair loading; DNS/IP SANs, RSA/signature/EKU/usage, seven-day validity and
+  fingerprint; existing/empty/incomplete output preservation; checkout/worktree,
+  relative/missing-parent/ambiguous/temp paths; simultaneous generation with one
+  complete winner; mismatched keys and malformed certificate rejection; unchanged
+  CurrentUser and LocalMachine root trust snapshots.
+- A direct `go run .\scripts\tlscheck\main.go <cert> <key>` also loaded an
+  emitted pair before any trust action. `go vet scripts\tlscheck\main.go` passed.
+- Creating the suite's disposable NTFS junction was denied by the execution
+  sandbox (`New-Item -ItemType Junction`: Access is denied). That setup/case did
+  **not** pass and was explicitly skipped, without bypassing the restriction.
+  A separate public helper invocation against the already-existing profile
+  `Application Data` junction refused output; it created no artifact and changed
+  no junction. This is manual refusal evidence, not a successful disposable test.
+- Independent specification/standards review found no blocking defects. A minor
+  duplicated-profile suggestion was fixed by deriving manifest profile metadata
+  from the emitted certificate/key; narrow re-review found no new issue.
+
+No trust import/removal, YAML setup, real account, service registration, Explorer
+or VS Code acceptance was performed. No native DAV compatibility is claimed.
+The suite's printed fixture locations belonged to the execution sandbox, which
+may dispose them after the process ends; the evidence is not a reusable trusted
+certificate installation. Run generation again with an explicitly reviewed
+persistent private output path before any separately approved real setup.
