@@ -258,8 +258,17 @@ func encodePatchResponse(requestPath string, changes []propertyChange) ([]byte, 
 	for _, c := range changes {
 		start("propstat")
 		start("prop")
-		_ = e.EncodeToken(xml.StartElement{Name: c.name})
-		_ = e.EncodeToken(xml.EndElement{Name: c.name})
+		property := xml.StartElement{Name: c.name}
+		switch c.name.Space {
+		case "":
+			// An unqualified name must not inherit the enclosing DAV default.
+			property.Attr = []xml.Attr{{Name: xml.Name{Local: "xmlns"}, Value: ""}}
+		case xmlNamespace:
+			// The reserved XML namespace may only use its predefined prefix.
+			property.Name = xml.Name{Local: "xml:" + c.name.Local}
+		}
+		_ = e.EncodeToken(property)
+		_ = e.EncodeToken(property.End())
 		end("prop")
 		text("status", fmt.Sprintf("HTTP/1.1 %d %s", c.status, http.StatusText(c.status)))
 		if c.protected {
