@@ -26,11 +26,19 @@ func (h Handler) Execute(args []string, controls <-chan svc.ChangeRequest, statu
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// RunObserved emits at most Starting, Ready, Stopping and Stopped. Keep
-	// reporting independent of SCM consumption; never block server cleanup.
-	events := make(chan server.Event, 4)
-	done := make(chan error, 1)
-	go func() { done <- h.Run(ctx, func(event server.Event) { events <- event }) }()
+	// A single FIFO orders lifecycle transitions before the terminal result.
+	// Buffer all four RunObserved events plus completion so delayed SCM status
+	// consumption cannot prevent server resource cleanup.
+	type update struct {
+		event    server.Event
+		finished bool
+		result   error
+	}
+	updates := make(chan update, 5)
+	go func() {
+		err := h.Run(ctx, func(event server.Event) { updates <- update{event: event} })
+		updates <- update{finished: true, result: err}
+	}()
 	stopping := false
 	for {
 		select {
@@ -50,8 +58,22 @@ func (h Handler) Execute(args []string, controls <-chan svc.ChangeRequest, statu
 			case svc.Interrogate:
 				statuses <- current
 			}
-		case event := <-events:
-			switch event.Phase {
+		case u := <-updates:
+			if u.finished {
+				switch {
+				case u.result == nil:
+					return false, 0
+				case errors.Is(u.result, server.ErrShutdownFailed):
+					return true, 4
+				case errors.Is(u.result, server.ErrShutdownDeadline):
+					return true, 3
+				case errors.Is(u.result, server.ErrServing):
+					return true, 2
+				default:
+					return true, 1
+				}
+			}
+			switch u.event.Phase {
 			case server.Ready:
 				if !stopping {
 					current = svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
@@ -67,19 +89,7 @@ func (h Handler) Execute(args []string, controls <-chan svc.ChangeRequest, statu
 				current.CheckPoint++
 				statuses <- current
 			}
-		case err := <-done:
-			switch {
-			case err == nil:
-				return false, 0
-			case errors.Is(err, server.ErrShutdownFailed):
-				return true, 4
-			case errors.Is(err, server.ErrShutdownDeadline):
-				return true, 3
-			case errors.Is(err, server.ErrServing):
-				return true, 2
-			default:
-				return true, 1
-			}
+
 		}
 	}
 }

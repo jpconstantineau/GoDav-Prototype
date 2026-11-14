@@ -3,10 +3,8 @@ package cli
 import (
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
-
-	"github.com/jpconstantineau/GoDav-Prototype/internal/config"
+	"unicode"
 )
 
 func serviceCommand(action string, args []string, stdout, stderr io.Writer) int {
@@ -23,7 +21,7 @@ func serviceCommand(action string, args []string, stdout, stderr io.Writer) int 
 			value, args = args[0], args[1:]
 		}
 		if (flag != "--name" && (action != "install" || (flag != "--config" && flag != "--account"))) ||
-			value == "" || strings.HasPrefix(value, "--") || strings.ContainsAny(value, "\x00\r\n") || values[flag] != "" {
+			value == "" || strings.HasPrefix(value, "--") || strings.IndexFunc(value, unicode.IsControl) >= 0 || values[flag] != "" {
 			valid = false
 			break
 		}
@@ -38,7 +36,7 @@ func serviceCommand(action string, args []string, stdout, stderr io.Writer) int 
 			valid = false
 		}
 	}
-	if action == "install" && (!filepath.IsAbs(values["--config"]) || !config.ValidPathSyntax(values["--config"]) || values["--account"] == "") {
+	if action == "install" && (!serviceConfigPathValid(values["--config"]) || values["--account"] == "") {
 		valid = false
 	}
 	if !valid {

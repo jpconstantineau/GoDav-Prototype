@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -23,13 +24,14 @@ type fakeSCM struct {
 	controls chan svc.ChangeRequest
 	statuses chan svc.Status
 	done     chan serviceOutcome
+	released chan struct{}
 }
 
 // This executes the real HTTPS/SQLite lifecycle behind the SCM protocol seam.
 // Channels are a fake SCM, not proof of registration, logon, or native dispatch.
 func startServiceHarness(t *testing.T, config string) *fakeSCM {
 	t.Helper()
-	scm := &fakeSCM{make(chan svc.ChangeRequest), make(chan svc.Status), make(chan serviceOutcome, 1)}
+	scm := &fakeSCM{make(chan svc.ChangeRequest), make(chan svc.Status), make(chan serviceOutcome, 1), make(chan struct{})}
 	abort, cancel := context.WithCancel(context.Background())
 	finished := make(chan struct{})
 	h := service.Handler{Run: func(ctx context.Context, observer server.Observer) error {
@@ -37,7 +39,9 @@ func startServiceHarness(t *testing.T, config string) *fakeSCM {
 		cleanup := context.AfterFunc(abort, stop)
 		defer cleanup()
 		defer stop()
-		return server.RunObserved(ctx, config, server.Identity{}, io.Discard, observer)
+		err := server.RunObserved(ctx, config, server.Identity{}, io.Discard, observer)
+		close(scm.released)
+		return err
 	}}
 	go func() {
 		defer close(finished)
@@ -231,5 +235,29 @@ func TestServiceCommandsRemainBlockedWithoutProvisioningContract(t *testing.T) {
 		if strings.Contains(stderr, "FixtureAccount") {
 			t.Fatal("service error echoed account")
 		}
+	}
+}
+
+func TestServiceHostIdleStopOrdersPendingBeforeCompletion(t *testing.T) {
+	f := newServerFixture(t, development(t))
+	for i := 0; i < 16; i++ {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			scm := startServiceHarness(t, f.config)
+			scm.next(t, svc.StartPending)
+			scm.next(t, svc.Running)
+			scm.send(t, svc.Stop)
+			// Hold the handler on its first status send while the real runner
+			// completely releases its DB and queues all lifecycle transitions.
+			select {
+			case <-scm.released:
+			case <-time.After(8 * time.Second):
+				t.Fatal("idle server did not release state")
+			}
+			scm.next(t, svc.StopPending)
+			if got := scm.next(t, svc.StopPending); got.CheckPoint != 2 {
+				t.Fatal("admission checkpoint was lost")
+			}
+			scm.result(t, false, 0)
+		})
 	}
 }

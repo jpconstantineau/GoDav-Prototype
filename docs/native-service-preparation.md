@@ -22,7 +22,8 @@ protocol. It publishes StartPending before opening state; Running with Stop and
 Shutdown acceptance only after Ready; StopPending when stop is requested and a
 second checkpoint on real admission closure. Interrogate repeats actual status;
 repeated stop does not reset progress; unsupported pause does not change state.
-No timer invents checkpoints. A 35-second stop wait hint covers configured grace
+A single FIFO keeps completion behind lifecycle transitions, including fast idle
+shutdown. No timer invents checkpoints. A 35-second stop wait hint covers configured grace
 (up to 30 seconds) plus cleanup target; it is not a hard-kill promise. Delayed
 owners keep the service pending until joined, following the #12 contract.
 

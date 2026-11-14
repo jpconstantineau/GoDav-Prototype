@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -18,6 +19,17 @@ func TestServiceCommandsRefuseIncompleteArgumentsWithoutWrites(t *testing.T) {
 			if err != nil || len(entries) != 0 {
 				t.Fatal("service validation changed local state")
 			}
+		}
+	}
+}
+
+func TestServiceCommandsRejectAccountControls(t *testing.T) {
+	bin := development(t)
+	for _, account := range []string{"Fixture\tAccount", "Fixture\x1bAccount", "Fixture\x7fAccount", "Fixture\u0085Account"} {
+		dir := t.TempDir()
+		out, stderr, code := command(t, dir, bin, "install", "service", "--name", "FixtureService", "--config", filepath.Join(dir, "godav.yaml"), "--account", account)
+		if code != 2 || out != "" || stderr != "godav: invalid service arguments; explicit --name is required, and install also requires absolute --config and explicit --account\n" {
+			t.Fatal("service account control character was not rejected as usage")
 		}
 	}
 }
