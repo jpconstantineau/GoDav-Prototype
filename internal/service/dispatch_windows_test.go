@@ -159,3 +159,29 @@ func TestDispatchRejectsLateRunnerBeforeApplicationWork(t *testing.T) {
 		t.Fatalf("late runner reported success: %v %d", specific, code)
 	}
 }
+
+// Repeated channel-synchronized starts exercise prompt cancellation racing with
+// dispatcher completion. No sleep or external SCM determines the ordering.
+func TestDispatchRejectsEarlyNilReturnWithPromptSuccessfulCleanup(t *testing.T) {
+	for attempt := 0; attempt < 4096; attempt++ {
+		started := make(chan struct{})
+		finished := make(chan struct{})
+		d := &fakeDispatcher{isService: true, execute: func(name string, h svc.Handler) error {
+			go func() {
+				defer close(finished)
+				h.Execute([]string{name}, make(chan svc.ChangeRequest), make(chan svc.Status, 8))
+			}()
+			<-started
+			return nil
+		}}
+		err := Dispatch(d, "GoDav-test", func(ctx context.Context, _ server.Observer) error {
+			close(started)
+			<-ctx.Done()
+			return nil
+		})
+		<-finished
+		if err == nil {
+			t.Fatalf("early nil dispatcher return lost at prompt cleanup attempt %d", attempt)
+		}
+	}
+}

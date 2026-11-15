@@ -39,7 +39,7 @@ func Dispatch(dispatcher Dispatcher, name string, run func(context.Context, serv
 	defer cancel()
 	completed := make(chan error, 1)
 	var gate sync.Mutex
-	var started, dispatchFinished, repeated bool
+	var started, runnerFinished, dispatchFinished, repeated bool
 	handler := Handler{Run: func(ctx context.Context, observer server.Observer) error {
 		gate.Lock()
 		if dispatchFinished {
@@ -58,6 +58,9 @@ func Dispatch(dispatcher Dispatcher, name string, run func(context.Context, serv
 		defer stopCancellation()
 		defer cancelRun()
 		result := run(ctx, observer)
+		gate.Lock()
+		runnerFinished = true
+		gate.Unlock()
 		completed <- result
 		return result
 	}}
@@ -66,7 +69,7 @@ func Dispatch(dispatcher Dispatcher, name string, run func(context.Context, serv
 	// either owns work that we join below, or is refused before application work.
 	gate.Lock()
 	dispatchFinished = true
-	didStart, didRepeat := started, repeated
+	didStart, didFinish, didRepeat := started, runnerFinished, repeated
 	gate.Unlock()
 	cancel()
 	if didRepeat {
@@ -75,13 +78,12 @@ func Dispatch(dispatcher Dispatcher, name string, run func(context.Context, serv
 	if !didStart {
 		return errors.Join(dispatchErr, errors.New("service dispatcher returned without starting the server lifecycle"))
 	}
-	select {
-	case result := <-completed:
-		return errors.Join(dispatchErr, result)
-	default:
-		// svc.Run can return after a status publication failure without joining
-		// Handler.Execute. Preserve runner-owned cleanup even on that error path.
+	if !didFinish {
+		// Record the pre-cancellation state. Prompt successful cleanup must not turn
+		// a premature nil dispatcher return into apparent lifecycle success.
 		dispatchErr = errors.Join(dispatchErr, errors.New("service dispatcher returned before the server lifecycle completed"))
-		return errors.Join(dispatchErr, <-completed)
 	}
+	// svc.Run can return after a status publication failure without joining
+	// Handler.Execute. Preserve runner-owned cleanup even on that error path.
+	return errors.Join(dispatchErr, <-completed)
 }
