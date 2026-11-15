@@ -633,7 +633,7 @@ func TestFilesInterruptedInputPreservesPriorState(t *testing.T) {
 	_, _, listing := fileRequest(t, client, f, "PROPFIND", "/dav/", nil, map[string]string{"Depth": "1"})
 	for _, path := range []string{"/dav/old", "/dav/empty", "/dav/new"} {
 		for _, chunked := range []bool{false, true} {
-			conn, err := tls.Dial("tcp", strings.TrimPrefix(f.origin, "https://"), &tls.Config{RootCAs: f.roots, ServerName: "localhost", MinVersion: tls.VersionTLS12})
+			conn, err := fixtureTLSDial(f, &tls.Config{RootCAs: f.roots, ServerName: "localhost", MinVersion: tls.VersionTLS12})
 			if err != nil {
 				t.Fatal("truncation fixture TLS failed")
 			}
@@ -988,7 +988,7 @@ func TestFilesInProcessPausedReaderAllowsSave(t *testing.T) {
 	}
 	// A small socket receive buffer and an undrained large body keep HTTP output
 	// pending while public requests prove the database is available elsewhere.
-	conn, err := tls.Dial("tcp", strings.TrimPrefix(f.origin, "https://"), &tls.Config{RootCAs: f.roots, ServerName: "localhost", MinVersion: tls.VersionTLS12})
+	conn, err := fixtureTLSDial(f, &tls.Config{RootCAs: f.roots, ServerName: "localhost", MinVersion: tls.VersionTLS12})
 	if err != nil {
 		t.Fatal("reader fixture TLS failed")
 	}

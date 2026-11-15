@@ -35,6 +35,7 @@ import (
 
 type serverFixture struct {
 	dir, config, origin, password string
+	dialAddress                   string
 	roots                         *x509.CertPool
 }
 
@@ -87,7 +88,7 @@ func newServerFixture(t *testing.T, bin string) serverFixture {
 	if !roots.AppendCertsFromPEM(certPEM) {
 		t.Fatal("fixture roots failed")
 	}
-	return serverFixture{dir: dir, config: config, origin: "https://localhost:" + port, password: matches[0][1], roots: roots}
+	return serverFixture{dir: dir, config: config, origin: "https://localhost:" + port, password: matches[0][1], dialAddress: addr, roots: roots}
 }
 
 type safeCapture struct {
@@ -140,7 +141,7 @@ func startServer(t *testing.T, bin string, fixture serverFixture) *serverProcess
 }
 func (p *serverProcess) stop() { p.stopOnce.Do(func() { _ = p.cmd.Process.Kill(); <-p.done }) }
 func fixtureClient(f serverFixture) *http.Client {
-	return &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: f.roots, MinVersion: tls.VersionTLS12}}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{DialContext: f.dialContext, TLSClientConfig: &tls.Config{RootCAs: f.roots, ServerName: "localhost", MinVersion: tls.VersionTLS12}}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 func davRequest(t *testing.T, client *http.Client, f serverFixture, method, path string, authenticated bool) *http.Response {
 	t.Helper()
