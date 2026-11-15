@@ -9,8 +9,9 @@ import (
 var ErrMoveForbidden = errors.New("move mapping forbidden")
 
 type MoveFailure struct {
-	Path  string
-	Cause error
+	Path       string
+	Collection bool
+	Cause      error
 }
 
 func (e *MoveFailure) Error() string { return e.Cause.Error() }

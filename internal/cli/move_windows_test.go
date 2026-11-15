@@ -147,6 +147,7 @@ func TestMoveProtocolValidationPreservesState(t *testing.T) {
 		status                    int
 	}{
 		{"exact noop", "/dav/file", "/dav/file", nil, 403},
+		{"exact noop before overwrite", "/dav/file", "/dav/file", map[string]string{"Overwrite": "F"}, 403},
 		{"case collision F", "/dav/file", "/dav/FILE", map[string]string{"Overwrite": "F"}, 412},
 		{"collection depth0", "/dav/folder", "/dav/new", map[string]string{"Depth": "0"}, 400},
 		{"root source", "/dav/", "/dav/new", nil, 403},
@@ -336,5 +337,36 @@ func TestMoveLocksSubtreeAndDestinationScope(t *testing.T) {
 	code, _, _ = fileRequest(t, c, f, "UNLOCK", "/dav/TO", nil, map[string]string{"Lock-Token": destLock})
 	if code != 204 {
 		t.Fatalf("renamed unlock:%d", code)
+	}
+}
+
+func TestMoveCollectionErrorHrefs(t *testing.T) {
+	f, c, _ := liveFiles(t, 1024)
+	for _, path := range []string{"/dav/source", "/dav/source/Locked%20%26%20collection"} {
+		code, _, _ := fileRequest(t, c, f, "MKCOL", path, nil, nil)
+		if code != 201 {
+			t.Fatal("collection fixture failed")
+		}
+	}
+	acquireFixtureLock(t, c, f, "/dav/source/Locked%20%26%20collection", "0", "Second-60")
+	code, _, body := moveRequest(t, c, f, "/dav/source", "/dav/renamed", nil)
+	if code != 207 || !strings.Contains(string(body), "/dav/source/Locked%20&amp;%20collection/</d:href>") || !strings.Contains(string(body), "423 Locked") {
+		t.Fatalf("collection error href:%d %s", code, body)
+	}
+	// A collection rejected by the destination-depth bound is identified with
+	// the same trailing-slash convention as ordinary collection discovery.
+	fileRequest(t, c, f, "MKCOL", "/dav/other", nil, nil)
+	fileRequest(t, c, f, "MKCOL", "/dav/other/child", nil, nil)
+	path := "/dav"
+	for i := 0; i < 31; i++ {
+		path += "/d"
+		code, _, _ = fileRequest(t, c, f, "MKCOL", path, nil, nil)
+		if code != 201 {
+			t.Fatal("depth fixture failed")
+		}
+	}
+	code, _, body = moveRequest(t, c, f, "/dav/other", path+"/moved", nil)
+	if code != 207 || !strings.Contains(string(body), "/moved/child/</d:href>") {
+		t.Fatalf("bounded collection error href:%d %s", code, body)
 	}
 }

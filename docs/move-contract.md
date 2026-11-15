@@ -21,11 +21,13 @@ collection at the destination. No parents are invented.
 File MOVE accepts Depth 0, infinity or omission. Collections require infinity or
 omission. Other/duplicate/empty depths are 400. Overwrite defaults to T; T/F
 literals accept ASCII case variants; other/duplicate/empty values are 400.
-Overwrite F returns 412 for every mapped destination, including case-only rename.
+After no-op rejection, Overwrite F returns 412 for every mapped destination,
+including case-only rename.
 Nonempty bodies return 415; incomplete bodies 400, before acquiring the store.
 
 New mapping returns 201. Replacement and changed case-only spelling return 204.
-An exact stored canonical destination with no spelling change returns 403;
+An exact stored canonical destination with no spelling change returns 403 before
+Overwrite F collision handling;
 noncanonical source addressing does not turn this into a rename. Case-only
 spelling changes are a deliberate case-preserving namespace extension to RFC
 4918's same-resource restriction. The requested destination basename is stored,
@@ -70,10 +72,13 @@ to source, destination or parents and use the existing complete If grammar.
 Every source and replaced destination subtree lease plus source/destination
 parent membership requires the submitted token and creator principal. Missing
 tokens produce 423 with DAV:lock-token-submitted; another principal produces 403.
-Child lock failures return bounded 207 with the failing child href, with no 424
+Child lock failures return bounded 207 with the failing child href (including
+the collection trailing slash), with no 424
 or redundant success statuses. Invalid resulting child paths likewise return
 207/400 naming that destination child. The complete request still rolls back;
 this deliberate atomic policy is stronger than partial collection MOVE.
+The existing bounded tree preflight supplies child kinds before these lock
+checks; no new query is performed while constructing an error response.
 
 After successful real MOVE, source-rooted leases are removed, never carried by
 stable node IDs. Destination ancestor leases continue to cover incoming paths.

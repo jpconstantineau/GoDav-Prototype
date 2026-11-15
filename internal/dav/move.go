@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
@@ -73,32 +74,35 @@ func moveResource(w http.ResponseWriter, r *http.Request, service *files.Service
 // stronger atomic policy rolls back the entire request, not just that subtree.
 func moveDescendantError(w http.ResponseWriter, err error) bool {
 	path, status, condition := "", 0, ""
+	collection := false
 	var locked *files.TreeLockFailure
 	var failure *files.MoveFailure
-	if errors.As(err, &locked) {
+	if errors.As(err, &failure) {
+		path, collection = failure.Path, failure.Collection
+	} else if errors.As(err, &locked) {
 		path = locked.Path
-		if errors.Is(err, files.ErrLocked) {
-			status, condition = 423, "lock-token-submitted"
-		} else if errors.Is(err, files.ErrLockOwner) {
-			status = 403
-		}
-	} else if errors.As(err, &failure) {
-		path, status = failure.Path, 400
+	} else {
+		return false
+	}
+	switch {
+	case errors.Is(err, files.ErrLocked):
+		status, condition = 423, "lock-token-submitted"
+	case errors.Is(err, files.ErrLockOwner):
+		status = 403
+	case errors.Is(err, files.ErrInvalid):
+		status = 400
 	}
 	if status == 0 {
 		return false
 	}
 	var body bytes.Buffer
 	body.WriteString(`<d:multistatus xmlns:d="DAV:"><d:response><d:href>`)
+	if collection {
+		path += "/"
+	}
 	xml.EscapeText(&body, []byte((&url.URL{Path: "/dav/" + path}).EscapedPath()))
 	body.WriteString(`</d:href><d:status>HTTP/1.1 `)
-	if status == 423 {
-		body.WriteString("423 Locked")
-	} else if status == 403 {
-		body.WriteString("403 Forbidden")
-	} else {
-		body.WriteString("400 Bad Request")
-	}
+	body.WriteString(strconv.Itoa(status) + " " + http.StatusText(status))
 	body.WriteString(`</d:status>`)
 	if condition != "" {
 		body.WriteString(`<d:error><d:` + condition + `/></d:error>`)

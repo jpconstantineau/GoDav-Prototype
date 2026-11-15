@@ -28,6 +28,13 @@ They describe the code at each invocation, not an immutable aggregate pass.
 - move09-14-focused-regression: all MOVE tests and the legacy namespace depth/
   capability test passed together (50.791 seconds). Two intended routing names
   in that selector matched no tests; the exact original names are run separately.
+- move09-15-original-routing: the three original authentication/discovery/routing
+  tests passed (7.128 seconds). move09-16-vet: Windows vet passed on 5132538.
+- move09-17-red-collection-href: a locked descendant collection's 207 href lacked
+  the trailing slash. The bounded preflight now supplies its kind for formatting.
+- move09-18-reviewed-edges: collection error href escaping/slashes, deterministic
+  old-timestamp case-only/real replacement behavior, no-op/F precedence and the
+  affected lock/protocol tests passed together (15.381 seconds).
 
 Further focused tests, final exact clean revision, review outcomes, race and
 aggregate/release checks belong in the external sealed evidence manifest.

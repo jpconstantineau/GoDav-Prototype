@@ -3,10 +3,64 @@ package cli_test
 import (
 	"database/sql"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestMoveLastModifiedRepresentationTransitions(t *testing.T) {
+	bin := development(t)
+	f := newServerFixture(t, bin)
+	p := startServer(t, bin, f)
+	c := fixtureClient(f)
+	defer c.CloseIdleConnections()
+	for path, data := range map[string]string{"/dav/source": "source bytes", "/dav/destination": "old destination bytes"} {
+		code, _, _ := fileRequest(t, c, f, "PUT", path, strings.NewReader(data), nil)
+		if code != 201 {
+			t.Fatal("timestamp seed failed")
+		}
+	}
+	c.CloseIdleConnections()
+	p.stop()
+	// A valid stopped-fixture timestamp creates an independent old-state
+	// premise. No sleep, same-second race, private acceptance query or clock edit.
+	db, err := sql.Open("sqlite", filepath.Join(f.dir, "godav.sqlite"))
+	if err != nil {
+		t.Fatal("timestamp fixture open")
+	}
+	_, err = db.Exec(`UPDATE nodes SET modified_at=946684800 WHERE name IN ('source','destination')`)
+	closeErr := db.Close()
+	if err != nil || closeErr != nil {
+		t.Fatal("timestamp fixture write")
+	}
+	p = startServer(t, bin, f)
+	defer p.stop()
+	for _, path := range []string{"/dav/source", "/dav/destination"} {
+		code, h, _ := fileRequest(t, c, f, "HEAD", path, nil, nil)
+		if code != 200 || h.Get("Last-Modified") != "Sat, 01 Jan 2000 00:00:00 GMT" {
+			t.Fatal("public old timestamp premise differs")
+		}
+	}
+	code, _, _ := moveRequest(t, c, f, "/dav/source", "/dav/Source", nil)
+	if code != 204 {
+		t.Fatal("case rename failed")
+	}
+	_, h, _ := fileRequest(t, c, f, "HEAD", "/dav/Source", nil, nil)
+	if h.Get("Last-Modified") != "Sat, 01 Jan 2000 00:00:00 GMT" {
+		t.Fatal("case rename changed representation timestamp")
+	}
+	code, _, _ = moveRequest(t, c, f, "/dav/Source", "/dav/destination", nil)
+	if code != 204 {
+		t.Fatal("replacement MOVE failed")
+	}
+	code, h, body := fileRequest(t, c, f, "GET", "/dav/destination", nil, nil)
+	stamp, err := time.Parse(http.TimeFormat, h.Get("Last-Modified"))
+	if code != 200 || string(body) != "source bytes" || err != nil || !stamp.After(time.Unix(946684800, 0)) {
+		t.Fatal("changed destination representation did not advance timestamp")
+	}
+}
 
 func TestMoveCombinedTreeBoundsAndReopen(t *testing.T) {
 	for _, kind := range []string{"resources", "logical-bytes"} {

@@ -73,12 +73,6 @@ func (s *AccountStore) Move(ctx context.Context, from, to []string, options file
 		return false, err
 	}
 	submitted := e.DAV.Submitted()
-	if err := s.locks.CheckTreeWrite(sourcePath, e.Principal, submitted); err != nil {
-		return false, err
-	}
-	if err := s.locks.CheckTreeWrite(destinationPath, e.Principal, submitted); err != nil {
-		return false, err
-	}
 	tree, err := readMutationTree(ctx, tx, source)
 	if err != nil {
 		return false, err
@@ -91,7 +85,7 @@ func (s *AccountStore) Move(ctx context.Context, from, to []string, options file
 		}
 		if _, err := files.Components(path); err != nil {
 			if node.RelativePath != "" {
-				return false, &files.MoveFailure{Path: path, Cause: err}
+				return false, &files.MoveFailure{Path: path, Collection: !node.File, Cause: err}
 			}
 			return false, err
 		}
@@ -115,6 +109,14 @@ func (s *AccountStore) Move(ctx context.Context, from, to []string, options file
 				size += n.Size
 			}
 		}
+	}
+	// Bound metadata preflight also supplies collection kinds for canonical
+	// failing-child hrefs. There is no extra lookup/query during error formatting.
+	if err := s.locks.CheckTreeWrite(sourcePath, e.Principal, submitted); err != nil {
+		return false, moveTreeLockFailure(err, sourcePath, tree)
+	}
+	if err := s.locks.CheckTreeWrite(destinationPath, e.Principal, submitted); err != nil {
+		return false, moveTreeLockFailure(err, destinationPath, replaced)
 	}
 	var oldParent string
 	if tx.QueryRowContext(ctx, `SELECT parent_id FROM nodes WHERE id=?`, source.ID).Scan(&oldParent) != nil {
@@ -163,4 +165,21 @@ func (s *AccountStore) Move(ctx context.Context, from, to []string, options file
 		s.locks.KeepTreeMappings(destinationPath, paths)
 	}
 	return created, nil
+}
+
+func moveTreeLockFailure(err error, root string, tree []mutationNode) error {
+	var failure *files.TreeLockFailure
+	if !errors.As(err, &failure) {
+		return err
+	}
+	for _, node := range tree {
+		path := root
+		if node.RelativePath != "" {
+			path += "/" + node.RelativePath
+		}
+		if files.Key(path) == files.Key(failure.Path) {
+			return &files.MoveFailure{Path: path, Collection: !node.File, Cause: err}
+		}
+	}
+	return err
 }
