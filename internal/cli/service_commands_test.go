@@ -12,7 +12,7 @@ func TestServiceCommandsRefuseIncompleteArgumentsWithoutWrites(t *testing.T) {
 		for _, args := range [][]string{nil, {"--name"}, {"--name", ""}, {"--name", "a/b"}, {"--name", "valid", "--password", "synthetic-secret"}, {"--name", "a", "--name", "b"}} {
 			dir := t.TempDir()
 			out, stderr, code := command(t, dir, bin, append([]string{action, "service"}, args...)...)
-			if code != 2 || out != "" || stderr != "godav: invalid service arguments; explicit --name is required, and install also requires absolute --config and explicit --account\n" {
+			if code != 2 || out != "" || stderr != "godav: invalid service arguments; explicit --name, absolute --config and --operator-sid are required; install also requires matching --account\n" {
 				t.Fatal("service command did not safely refuse invalid arguments")
 			}
 			entries, err := os.ReadDir(dir)
@@ -28,7 +28,7 @@ func TestServiceCommandsRejectAccountControls(t *testing.T) {
 	for _, account := range []string{"Fixture\tAccount", "Fixture\x1bAccount", "Fixture\x7fAccount", "Fixture\u0085Account"} {
 		dir := t.TempDir()
 		out, stderr, code := command(t, dir, bin, "install", "service", "--name", "FixtureService", "--config", filepath.Join(dir, "godav.yaml"), "--account", account)
-		if code != 2 || out != "" || stderr != "godav: invalid service arguments; explicit --name is required, and install also requires absolute --config and explicit --account\n" {
+		if code != 2 || out != "" || stderr != "godav: invalid service arguments; explicit --name, absolute --config and --operator-sid are required; install also requires matching --account\n" {
 			t.Fatal("service account control character was not rejected as usage")
 		}
 	}

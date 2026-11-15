@@ -1,5 +1,7 @@
 # Native service preparation (partial slice 12)
 
+Historical preparation snapshot. See [current native service contract](native-service-contract.md) for the later implemented design and remaining acceptance limits.
+
 Issue: https://github.com/jpconstantineau/GoDav-Prototype/issues/13.
 Base: 30e136baa7b26054187d6f9a4934497db4d17424.
 

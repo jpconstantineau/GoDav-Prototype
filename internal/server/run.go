@@ -36,7 +36,13 @@ func Run(ctx context.Context, configPath string, identity Identity, output io.Wr
 
 // RunObserved shares the foreground lifecycle with native service hosting.
 // Stopped is delivered after cleanup, including on startup failure.
-func RunObserved(ctx context.Context, configPath string, identity Identity, output io.Writer, observer Observer) (result error) {
+func RunObserved(ctx context.Context, configPath string, identity Identity, output io.Writer, observer Observer) error {
+	return RunWithPolicy(ctx, configPath, identity, output, observer, nil)
+}
+
+// RunWithPolicy retains the shared server lifecycle with a session-scoped file
+// policy. The caller must bind native service identity before constructing it.
+func RunWithPolicy(ctx context.Context, configPath string, identity Identity, output io.Writer, observer Observer, policy *localfs.Policy) (result error) {
 	observer.report(Starting, nil)
 	defer func() { observer.report(Stopped, result) }()
 	muxSetting := ""
@@ -48,7 +54,7 @@ func RunObserved(ctx context.Context, configPath string, identity Identity, outp
 	if muxSetting == "1" {
 		return errors.New("legacy HTTP routing unsupported")
 	}
-	state, err := localstate.OpenExisting(ctx, configPath, localstate.WriteExisting)
+	state, err := localstate.OpenExistingWithPolicy(ctx, configPath, localstate.WriteExisting, policy)
 	if err != nil {
 		return err
 	}
@@ -78,11 +84,11 @@ func RunObserved(ctx context.Context, configPath string, identity Identity, outp
 	if settings.DAVPrefix != "/dav/" {
 		return errors.New("unsupported DAV prefix")
 	}
-	certPEM, err := localfs.ReadPrivateFile(settings.CertFile, 1<<20)
+	certPEM, err := policy.ReadPrivateFile(settings.CertFile, 1<<20)
 	if err != nil {
 		return errors.New("TLS material unavailable")
 	}
-	keyPEM, err := localfs.ReadPrivateFile(settings.KeyFile, 1<<20)
+	keyPEM, err := policy.ReadPrivateFile(settings.KeyFile, 1<<20)
 	if err != nil {
 		return errors.New("TLS material unavailable")
 	}

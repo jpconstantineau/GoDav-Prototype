@@ -4,15 +4,15 @@ package cli
 
 import (
 	"fmt"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/service"
 	"io"
 	"path/filepath"
 )
 
-func serviceUnavailable(stderr io.Writer) int {
+func manageService(_ service.Action, _ service.Registration, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stderr, "godav: native Windows service commands are unsupported on this platform")
 	return 1
 }
 
-// A non-Windows command never opens this path. Native absolute syntax is enough
-// to distinguish usage errors before reporting the platform as unsupported.
+// Non-Windows commands never open this path.
 func serviceConfigPathValid(path string) bool { return filepath.IsAbs(path) }

@@ -216,16 +216,16 @@ func TestServiceHostShutdownDeadlinePreservesCommittedState(t *testing.T) {
 	}
 }
 
-func TestServiceCommandsRemainBlockedWithoutProvisioningContract(t *testing.T) {
+func TestServiceCommandsRejectWrongOperatorWithoutSCM(t *testing.T) {
 	bin := development(t)
 	for _, action := range []string{"install", "check", "start", "stop", "uninstall"} {
 		dir := t.TempDir()
-		args := []string{action, "service", "--name", "FixtureService"}
+		args := []string{action, "service", "--name", "FixtureService", "--config", filepath.Join(dir, "missing.yaml"), "--operator-sid", "S-1-5-21-1-2-3-1001"}
 		if action == "install" {
-			args = append(args, "--config", filepath.Join(dir, "missing.yaml"), "--account", `EXAMPLE\FixtureAccount`)
+			args = append(args, "--account", `NT SERVICE\FixtureService`)
 		}
 		out, stderr, code := command(t, dir, bin, args...)
-		if code != 1 || out != "" || stderr != "godav: service operation unavailable; identity and provisioning contract pending\n" {
+		if code != 1 || out != "" || stderr != "godav: service operation requires the explicit operator account\n" {
 			t.Fatal("unapproved service operation was not clearly blocked")
 		}
 		entries, err := os.ReadDir(dir)
