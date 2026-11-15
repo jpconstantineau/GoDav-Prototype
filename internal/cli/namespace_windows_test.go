@@ -577,10 +577,10 @@ func TestNamespaceBoundsDepthAndPreservesDiscovery(t *testing.T) {
 	namespaceStatus(t, client, f, "MKCOL", path+"d/", nil, 400)
 	response := davRequest(t, client, f, "OPTIONS", path, true)
 	response.Body.Close()
-	if response.StatusCode != 200 || response.Header.Get("Allow") != "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT, LOCK, UNLOCK" || response.Header.Get("DAV") != "" {
+	if response.StatusCode != 200 || response.Header.Get("Allow") != "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT, LOCK, UNLOCK, MOVE" || response.Header.Get("DAV") != "" {
 		t.Fatal("collection capability advertisement is false")
 	}
-	for _, method := range []string{"PUT", "DELETE", "MOVE", "COPY"} {
+	for _, method := range []string{"PUT", "DELETE", "COPY"} {
 		namespaceStatus(t, client, f, method, path, nil, 405)
 	}
 	if got := namespaceListing(t, client, f, path, "1"); len(got) != 1 {

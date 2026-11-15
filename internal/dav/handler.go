@@ -136,7 +136,11 @@ func Trace(logger *slog.Logger, next http.Handler) http.Handler {
 		id := ids.Add(1)
 		record := &statusWriter{ResponseWriter: w}
 		defer func() {
-			logger.Info("request", "method", safeMethod(r.Method), "path", safePath(r), "status", record.code(), "outcome", record.outcome(r.Context()), "duration", time.Since(start), "request_id", id)
+			fields := []any{"method", safeMethod(r.Method), "path", safePath(r), "status", record.code(), "outcome", record.outcome(r.Context()), "duration", time.Since(start), "request_id", id}
+			if r.Method == "MOVE" {
+				fields = append(fields, "destination", safeMoveDestination(r))
+			}
+			logger.Info("request", fields...)
 		}()
 		next.ServeHTTP(record, r)
 	})

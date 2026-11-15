@@ -15,10 +15,13 @@ import (
 // discovery reuses upstream PROPFIND over a read-only committed snapshot.
 func discovery(collections *files.Service, maxBytes int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Allow", "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT, LOCK, UNLOCK")
+		w.Header().Set("Allow", "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT, LOCK, UNLOCK, MOVE")
 		path := strings.TrimPrefix(r.URL.Path, "/dav")
 		path = strings.TrimPrefix(path, "/")
 		switch r.Method {
+		case "MOVE":
+			moveResource(w, r, collections, path)
+			return
 		case "LOCK":
 			lockResource(w, r, collections, path)
 			return

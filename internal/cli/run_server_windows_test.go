@@ -220,7 +220,7 @@ func TestRunServerAuthenticatesStoredAccount(t *testing.T) {
 			if response.StatusCode != tc.status {
 				t.Fatalf("unexpected auth status %d", response.StatusCode)
 			}
-			if tc.status == 200 && (response.Header.Get("Allow") != "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT, LOCK, UNLOCK" || response.Header.Get("DAV") != "") {
+			if tc.status == 200 && (response.Header.Get("Allow") != "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT, LOCK, UNLOCK, MOVE" || response.Header.Get("DAV") != "") {
 				t.Fatal("partial discovery advertises unsupported capability")
 			}
 			if tc.status == 401 && response.Header.Get("WWW-Authenticate") != `Basic realm="GoDav"` {
@@ -330,7 +330,7 @@ func TestRunServerRejectsUnsafeRoutingBeforeMux(t *testing.T) {
 		{name: "destination-outside", path: "/dav/", destination: f.origin + "/other/x", auth: true, status: 403},
 		{name: "destination-relative", path: "/dav/", destination: "/dav/x", auth: true, status: 400},
 		{name: "destination-invalid-escape", path: "/dav/", destination: f.origin + "/dav/%zz", auth: true, status: 400},
-		{name: "destination-valid-unsupported", path: "/dav/", method: "MOVE", destination: f.origin + "/dav/x", auth: true, status: 405},
+		{name: "destination-valid-root-move", path: "/dav/", method: "MOVE", destination: f.origin + "/dav/x", auth: true, status: 403},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			method := tc.method
