@@ -178,7 +178,7 @@ func moveTreeLockFailure(err error, root string, tree []mutationNode) error {
 			path += "/" + node.RelativePath
 		}
 		if files.Key(path) == files.Key(failure.Path) {
-			return &files.MoveFailure{Path: path, Collection: !node.File, Cause: err}
+			return &files.MoveFailure{Path: failure.Path, Collection: !node.File, Cause: err}
 		}
 	}
 	return err

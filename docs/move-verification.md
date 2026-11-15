@@ -35,6 +35,10 @@ They describe the code at each invocation, not an immutable aggregate pass.
 - move09-18-reviewed-edges: collection error href escaping/slashes, deterministic
   old-timestamp case-only/real replacement behavior, no-op/F precedence and the
   affected lock/protocol tests passed together (15.381 seconds).
+- move09-19-red-destination-spelling: an existing locked destination collection
+  reported requested root casing rather than its stored canonical spelling.
+- move09-20-destination-spelling: the narrow correction now retains the lease's
+  canonical path while using preflight kind; collection href test passed (3.623s).
 
 Further focused tests, final exact clean revision, review outcomes, race and
 aggregate/release checks belong in the external sealed evidence manifest.

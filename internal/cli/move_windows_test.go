@@ -357,6 +357,13 @@ func TestMoveCollectionErrorHrefs(t *testing.T) {
 	// the same trailing-slash convention as ordinary collection discovery.
 	fileRequest(t, c, f, "MKCOL", "/dav/other", nil, nil)
 	fileRequest(t, c, f, "MKCOL", "/dav/other/child", nil, nil)
+	fileRequest(t, c, f, "MKCOL", "/dav/Destination", nil, nil)
+	fileRequest(t, c, f, "MKCOL", "/dav/Destination/Locked", nil, nil)
+	acquireFixtureLock(t, c, f, "/dav/Destination/Locked", "0", "Second-60")
+	code, _, body = moveRequest(t, c, f, "/dav/other", "/dav/dESTINATION", nil)
+	if code != 207 || !strings.Contains(string(body), "/dav/Destination/Locked/</d:href>") {
+		t.Fatalf("existing destination error lost stored spelling: %d %s", code, body)
+	}
 	path := "/dav"
 	for i := 0; i < 31; i++ {
 		path += "/d"
