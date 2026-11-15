@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -114,11 +115,17 @@ func TestNamespaceInProcessConcurrentHTTPAndStop(t *testing.T) {
 	if got := namespaceListing(t, client, f, "/dav/", "1"); !slices.Equal(got, []string{"/dav/", "/dav/Shared/"}) {
 		t.Fatal("concurrent snapshot/create lost committed child")
 	}
+	// All requests and the committed-child readback are complete. Release the
+	// client's unused connections before stopping the server.
+	client.CloseIdleConnections()
+	stopStarted := time.Now()
 	cancel()
 	err := <-done
 	stopped = true
 	if err != nil {
-		t.Fatal("namespace drain failed")
+		// Keep checking ownership and persistent state after the server has joined.
+		t.Errorf("namespace drain failed: err=%v deadline=%t shutdown_failed=%t serving_failed=%t elapsed=%s\nsafe server diagnostics:\n%s",
+			err, errors.Is(err, server.ErrShutdownDeadline), errors.Is(err, server.ErrShutdownFailed), errors.Is(err, server.ErrServing), time.Since(stopStarted), logs.String())
 	}
 	dbPath := filepath.Join(f.dir, "godav.sqlite")
 	beforeDB, _ := os.ReadFile(dbPath)
