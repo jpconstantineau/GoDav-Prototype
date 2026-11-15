@@ -18,7 +18,13 @@ func discovery(collections *files.Service, maxBytes int64) http.Handler {
 		w.Header().Set("Allow", "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT, LOCK, UNLOCK")
 		path := strings.TrimPrefix(r.URL.Path, "/dav")
 		path = strings.TrimPrefix(path, "/")
+		if path != "" {
+			w.Header().Set("Allow", w.Header().Get("Allow")+", DELETE")
+		}
 		switch r.Method {
+		case "DELETE":
+			deleteResource(w, r, collections, path)
+			return
 		case "LOCK":
 			lockResource(w, r, collections, path)
 			return
