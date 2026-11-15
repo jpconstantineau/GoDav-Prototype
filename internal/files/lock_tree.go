@@ -2,6 +2,16 @@ package files
 
 import "strings"
 
+// TreeLockFailure identifies a descendant failure without changing the shared
+// error classification. MOVE uses its href for the required Multi-Status.
+type TreeLockFailure struct {
+	Path  string
+	Cause error
+}
+
+func (e *TreeLockFailure) Error() string { return e.Cause.Error() }
+func (e *TreeLockFailure) Unwrap() error { return e.Cause }
+
 // CheckTreeWrite checks a removed/rebound subtree and its parent membership.
 // Like the other LockTable methods, callers must own the publication gate.
 // Enumerating leases is bounded by MaxLocks, independently of namespace size.
@@ -12,10 +22,10 @@ func (l *LockTable) CheckTreeWrite(path, principal string, submitted map[string]
 	for _, lease := range l.entries {
 		if withinTree(path, lease.Path) {
 			if !submitted[lease.Token] {
-				return &LockRequired{Path: lease.Path}
+				return &TreeLockFailure{Path: lease.Path, Cause: &LockRequired{Path: lease.Path}}
 			}
 			if lease.Principal != principal {
-				return ErrLockOwner
+				return &TreeLockFailure{Path: lease.Path, Cause: ErrLockOwner}
 			}
 		}
 	}
