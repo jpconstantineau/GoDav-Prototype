@@ -48,4 +48,7 @@ power-loss recovery, push or issue mutation was performed.
 The pre-existing non-root capability/depth regression initially failed on its
 obsolete no-DELETE Allow assertion (4.640s). Its expectation now includes DELETE,
 retains PUT/MOVE/COPY refusals, and checks204 then404 at namespace depth32.
-Focused corrected result: delete10-capability-green.log. Production unchanged.
+The first fixture adaptation used a shared helper that supplies Depth1, so its
+DELETE correctly returned400 (delete10-capability-green.log, retained failure).
+The final assertion omits Depth via the normal HTTP helper; final result is
+delete10-capability-final.log. Production unchanged.

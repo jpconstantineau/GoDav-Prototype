@@ -586,8 +586,11 @@ func TestNamespaceBoundsDepthAndPreservesDiscovery(t *testing.T) {
 	if got := namespaceListing(t, client, f, path, "1"); len(got) != 1 {
 		t.Fatal("unsupported operation created a child")
 	}
-	namespaceStatus(t, client, f, "DELETE", path, nil, 204)
-	code, _, _ := fileRequest(t, client, f, "PROPFIND", path, nil, map[string]string{"Depth": "0"})
+	code, _, _ := fileRequest(t, client, f, "DELETE", path, nil, nil)
+	if code != 204 {
+		t.Fatalf("depth-32 deletion: %d", code)
+	}
+	code, _, _ = fileRequest(t, client, f, "PROPFIND", path, nil, map[string]string{"Depth": "0"})
 	if code != 404 {
 		t.Fatalf("depth-32 deletion remained visible: %d", code)
 	}
