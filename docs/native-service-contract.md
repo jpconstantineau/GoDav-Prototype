@@ -41,8 +41,10 @@ Install validates and pins the executable plus its immediate directory against
 untrusted modification, and pins the existing settings path against replacement.
 It does not read settings contents, open SQLite/TLS, create directories, initialize
 accounts, grant permissions, import trust or start the service. Runtime validation
-comes after separate provisioning. An install failure attempts to delete only its
-new registration; rollback uncertainty is reported, never called success.
+comes after separate provisioning. A policy setup or verification failure attempts
+to delete only the newly created registration; rollback uncertainty is reported,
+never called success. After valid registration, a failed status query leaves that
+registration in place and explicitly reports that its state could not be confirmed.
 
 Start and stop wait up to 45 seconds for observed Running/Stopped, not merely
 acceptance of a control request. Timeout does not force termination or promise the
@@ -90,7 +92,9 @@ membership:
   Place program/read-only material and mutable state in separate directories.
   All path components must be accessible for data/list reads; retained handles
   prevent replacement through the session, not merely check metadata once.
-  No function repairs permissions.
+  No function repairs permissions. Distinct validated local volumes are disjoint;
+  each path still undergoes its own canonical/no-reparse checks. Real cross-volume
+  session acceptance is pending because the test host exposes one usable volume.
 
 The explicit operator is trusted to provision/update the code, settings, TLS and
 data. Service data ownership does not confer permission to alter code/settings.

@@ -16,7 +16,7 @@ import (
 
 func verifyOperator(id string) error {
 	sid, err := windows.StringToSid(id)
-	if err != nil || !sid.IsValid() || sid.String() != id || !strings.HasPrefix(id, "S-1-5-21-") || sid.SubAuthorityCount() != 5 {
+	if err != nil || !sid.IsValid() || sid.String() != id || !strings.HasPrefix(id, "S-1-5-21-") || strings.Count(id, "-") != 7 {
 		return errors.New("invalid operator")
 	}
 	user, err := windows.GetCurrentThreadEffectiveToken().GetTokenUser()

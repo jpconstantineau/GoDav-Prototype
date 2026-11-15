@@ -120,9 +120,19 @@ func OpenExistingWithPolicy(ctx context.Context, configPath string, intent Inten
 		// Read-only material must never live in the service-writable database tree.
 		// Retain each checked file and parent, including TLS, for the whole session.
 		for _, file := range []string{path, current.CertFile, current.KeyFile} {
-			rel, relErr := filepath.Rel(filepath.Dir(current.DatabasePath), filepath.Dir(file))
-			if relErr != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+			dataDir, readDir := filepath.Dir(current.DatabasePath), filepath.Dir(file)
+			dataVolume, readVolume := filepath.VolumeName(dataDir), filepath.VolumeName(readDir)
+			// Rel rejects different volumes, but separate local volumes cannot
+			// contain one another. Both paths still undergo the same canonical,
+			// fixed-drive, no-reparse and ACL validation before any state opens.
+			if dataVolume == "" || readVolume == "" {
 				return nil, errors.New("service read-only material must be outside database directory")
+			}
+			if strings.EqualFold(dataVolume, readVolume) {
+				rel, relErr := filepath.Rel(dataDir, readDir)
+				if relErr != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+					return nil, errors.New("service read-only material must be outside database directory")
+				}
 			}
 			for _, dir := range []bool{true, false} {
 				var pin io.Closer

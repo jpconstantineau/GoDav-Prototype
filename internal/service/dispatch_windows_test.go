@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/server"
 	"golang.org/x/sys/windows/svc"
@@ -95,20 +96,66 @@ func TestDispatchRejectsMissingRunner(t *testing.T) {
 		t.Fatal("missing runner succeeded")
 	}
 }
-func TestDispatchDoesNotWaitForIncompleteRunner(t *testing.T) {
+func TestDispatchJoinsCancelledRunnerCleanup(t *testing.T) {
 	started := make(chan struct{})
+	cleaning := make(chan struct{})
+	release := make(chan struct{})
 	finished := make(chan struct{})
+	returned := make(chan error, 1)
+	dispatchFailure := errors.New("status publication failed")
+	cleanupFailure := errors.New("runner cleanup failed")
 	d := &fakeDispatcher{isService: true, execute: func(name string, h svc.Handler) error {
 		go func() {
 			defer close(finished)
 			h.Execute([]string{name}, make(chan svc.ChangeRequest), make(chan svc.Status, 8))
 		}()
 		<-started
-		return nil
+		return dispatchFailure
 	}}
-	err := Dispatch(d, "GoDav-test", func(ctx context.Context, _ server.Observer) error { close(started); <-ctx.Done(); return ctx.Err() })
-	if err == nil {
-		t.Fatal("incomplete runner succeeded")
+	go func() {
+		returned <- Dispatch(d, "GoDav-test", func(ctx context.Context, observe server.Observer) error {
+			observe(server.Event{Phase: server.Starting})
+			close(started)
+			<-ctx.Done()
+			observe(server.Event{Phase: server.Stopping})
+			close(cleaning)
+			<-release
+			observe(server.Event{Phase: server.Stopped, Err: cleanupFailure})
+			return cleanupFailure
+		})
+	}()
+	<-cleaning
+	var early error
+	earlyReturned := false
+	select {
+	case early = <-returned:
+		earlyReturned = true
+	case <-time.After(50 * time.Millisecond):
 	}
-	<-finished // Dispatch cancels the incomplete runner, without blocking on it.
+	close(release)
+	<-finished
+	if earlyReturned {
+		t.Fatalf("Dispatch returned before runner released ownership: %v", early)
+	}
+	err := <-returned
+	if !errors.Is(err, dispatchFailure) || !errors.Is(err, cleanupFailure) {
+		t.Fatalf("lost dispatcher or cleanup error: %v", err)
+	}
+}
+
+func TestDispatchRejectsLateRunnerBeforeApplicationWork(t *testing.T) {
+	var captured svc.Handler
+	d := &fakeDispatcher{isService: true, execute: func(_ string, h svc.Handler) error { captured = h; return nil }}
+	called := false
+	err := Dispatch(d, "GoDav-test", func(context.Context, server.Observer) error { called = true; return nil })
+	if err == nil {
+		t.Fatal("never-started dispatcher succeeded")
+	}
+	specific, code := captured.Execute([]string{"GoDav-test"}, make(chan svc.ChangeRequest), make(chan svc.Status, 8))
+	if called {
+		t.Fatal("application work began after dispatcher completion")
+	}
+	if !specific || code == 0 {
+		t.Fatalf("late runner reported success: %v %d", specific, code)
+	}
 }

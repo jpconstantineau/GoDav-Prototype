@@ -15,11 +15,14 @@ var errServicePolicy = errors.New("invalid or inaccessible service file policy")
 // ServicePolicy accepts an already-bound per-instance virtual account and an
 // explicit ordinary Windows account. Name-to-SID binding belongs to the native
 // service adapter; accepting these strings is not evidence of that binding.
+// Count canonical textual components rather than using SubAuthorityCount:
+// the pinned Windows binding returns an interior Go pointer through uintptr,
+// which is incompatible with checkptr instrumentation.
 func ServicePolicy(serviceSID, operatorSID string) (*Policy, error) {
 	service, e1 := windows.StringToSid(serviceSID)
 	operator, e2 := windows.StringToSid(operatorSID)
 	if e1 != nil || e2 != nil || !service.IsValid() || !operator.IsValid() || service.String() != serviceSID || operator.String() != operatorSID ||
-		!strings.HasPrefix(serviceSID, "S-1-5-80-") || service.SubAuthorityCount() != 6 ||
+		!strings.HasPrefix(serviceSID, "S-1-5-80-") || strings.Count(serviceSID, "-") != 8 ||
 		!ordinaryOperator(operator, operatorSID) || service.Equals(operator) {
 		return nil, errServicePolicy
 	}
@@ -148,7 +151,7 @@ func (p *Policy) pinObject(path string, directory, mutable, inherit bool) (io.Cl
 
 // SID shape alone does not distinguish an account from a domain group.
 func ordinaryOperator(sid *windows.SID, spelling string) bool {
-	if sid == nil || !sid.IsValid() || sid.String() != spelling || !strings.HasPrefix(spelling, "S-1-5-21-") || sid.SubAuthorityCount() != 5 {
+	if sid == nil || !sid.IsValid() || sid.String() != spelling || !strings.HasPrefix(spelling, "S-1-5-21-") || strings.Count(spelling, "-") != 7 {
 		return false
 	}
 	_, _, kind, err := sid.LookupAccount("")

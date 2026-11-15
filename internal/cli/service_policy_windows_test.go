@@ -26,7 +26,7 @@ func TestServicePolicyRejectsInvalidIdentities(t *testing.T) {
 		t.Fatal(err)
 	}
 	operator := user.User.Sid.String()
-	for _, sid := range []string{"", "S-1-5-19", "S-1-5-18", "S-1-5-80-0", "S-1-5-80-1-2-3-4", "S-1-5-80-01-2-3-4-5"} {
+	for _, sid := range []string{"", "S-1-5-19", "S-1-5-18", "S-1-5-80-0", "S-1-5-80-1-2-3-4", "S-1-5-80-01-2-3-4-5", "S-1-5-80-1-2-3-4-5-6", "S-1-5-80-1-2-3-4-4294967296", "S-1-5-80-1-2-3-4-5-"} {
 		if _, err := localfs.ServicePolicy(sid, operator); err == nil {
 			t.Fatalf("accepted invalid service identity %s", sid)
 		}
