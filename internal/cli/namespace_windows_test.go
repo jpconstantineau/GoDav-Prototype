@@ -577,13 +577,18 @@ func TestNamespaceBoundsDepthAndPreservesDiscovery(t *testing.T) {
 	namespaceStatus(t, client, f, "MKCOL", path+"d/", nil, 400)
 	response := davRequest(t, client, f, "OPTIONS", path, true)
 	response.Body.Close()
-	if response.StatusCode != 200 || response.Header.Get("Allow") != "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT, LOCK, UNLOCK" || response.Header.Get("DAV") != "" {
+	if response.StatusCode != 200 || response.Header.Get("Allow") != "OPTIONS, PROPFIND, PROPPATCH, MKCOL, GET, HEAD, PUT, LOCK, UNLOCK, DELETE" || response.Header.Get("DAV") != "" {
 		t.Fatal("collection capability advertisement is false")
 	}
-	for _, method := range []string{"PUT", "DELETE", "MOVE", "COPY"} {
+	for _, method := range []string{"PUT", "MOVE", "COPY"} {
 		namespaceStatus(t, client, f, method, path, nil, 405)
 	}
 	if got := namespaceListing(t, client, f, path, "1"); len(got) != 1 {
 		t.Fatal("unsupported operation created a child")
+	}
+	namespaceStatus(t, client, f, "DELETE", path, nil, 204)
+	code, _, _ := fileRequest(t, client, f, "PROPFIND", path, nil, map[string]string{"Depth": "0"})
+	if code != 404 {
+		t.Fatalf("depth-32 deletion remained visible: %d", code)
 	}
 }

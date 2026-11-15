@@ -44,3 +44,8 @@ These are focused passes, not aggregate/release/race/full scanner claims.
 Independent Spec and Standards views are requested before expensive final gates.
 No native Explorer/VS Code/SCM, Linux runtime, real-user-data deletion,
 power-loss recovery, push or issue mutation was performed.
+
+The pre-existing non-root capability/depth regression initially failed on its
+obsolete no-DELETE Allow assertion (4.640s). Its expectation now includes DELETE,
+retains PUT/MOVE/COPY refusals, and checks204 then404 at namespace depth32.
+Focused corrected result: delete10-capability-green.log. Production unchanged.
