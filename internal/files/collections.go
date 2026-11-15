@@ -49,6 +49,7 @@ type Snapshot struct {
 
 type Repository interface {
 	Move(context.Context, []string, []string, MoveOptions, Expectation) (bool, error)
+	DeleteResource(context.Context, []string, DeleteRequest, Expectation) error
 	CreateLock(context.Context, []string, LockRequest, Expectation) (Lease, bool, error)
 	RefreshLock(context.Context, []string, string, time.Duration, Expectation) (Lease, error)
 	Unlock(context.Context, []string, string, Expectation) error
