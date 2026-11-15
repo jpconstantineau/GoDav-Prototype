@@ -54,8 +54,16 @@ matching registration, checking absence after closing its own handle. It does no
 remove data, settings, certificates, ACLs or the stable ownership file.
 
 Check prints actual state and both Windows/service-specific exit codes. Usage
-errors exit 2; operational errors and nonzero reported service exit codes exit 1.
-Successful actions exit 0. State text is stopped, start-pending, stop-pending,
+errors exit 2; operational errors and nonzero reported service exit codes exit 1,
+with one status-only exception: Install and Check succeed when the observed state
+is Stopped, the Win32 code is 1077 (ERROR_SERVICE_NEVER_STARTED), and the
+service-specific code is zero. SCM uses 1077 when no start has been attempted
+since boot; a manual registration need not be started to install or inspect it.
+The actual 1077 remains in output. Manager errors still fail, and 1077 never
+counts as successful Start or Stop completion. Stop's existing cleanly-Stopped
+idempotency is unchanged: a never-started service is not a clean-stop result.
+Uninstall still succeeds only after confirming registration absence, irrespective
+of the prior stopped status code. Successful actions exit 0. State text is stopped, start-pending, stop-pending,
 running or unknown. Unknown SCM states are never relabeled Running or Stopped.
 Non-Windows service management reports unsupported and never opens supplied paths.
 
@@ -159,3 +167,4 @@ are available but are not a substitute for retained per-request traces.
 - [Service accounts and virtual accounts](https://learn.microsoft.com/windows/security/identity-protection/access-control/service-accounts)
 - [Restricted service SID policy](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/ns-winsvc-service_sid_info)
 - [Required privileges policy](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/ns-winsvc-service_required_privileges_infow)
+- [SCM query status and never-started code 1077](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-scmr/cf94d915-b4e1-40e5-872b-a9cb3ad09b46)

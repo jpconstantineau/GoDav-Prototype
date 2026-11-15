@@ -56,6 +56,11 @@ func manageService(action service.Action, r service.Registration, stdout, stderr
 		defer settings.Close()
 	}
 	status, err := service.ManageNative(context.Background(), action, r)
+	return reportServiceResult(action, status, err, stdout, stderr)
+}
+
+// reportServiceResult is the CLI outcome boundary after native management.
+func reportServiceResult(action service.Action, status service.Status, err error, stdout, stderr io.Writer) int {
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			fmt.Fprintln(stderr, "godav: service is not installed")
@@ -80,7 +85,11 @@ func manageService(action service.Action, r service.Registration, stdout, stderr
 		state = "running"
 	}
 	fmt.Fprintf(stdout, "service: %s\nwin32-exit: %d\nservice-exit: %d\n", state, status.Win32ExitCode, status.ServiceSpecificExitCode)
-	if status.Win32ExitCode != 0 || status.ServiceSpecificExitCode != 0 {
+	// SCM reports ERROR_SERVICE_NEVER_STARTED until a start attempt since boot.
+	// Registration and inspection must not require a start or hide the raw status.
+	neverStarted := (action == service.Install || action == service.Check) && status.State == service.Stopped &&
+		status.Win32ExitCode == uint32(windows.ERROR_SERVICE_NEVER_STARTED) && status.ServiceSpecificExitCode == 0
+	if !neverStarted && (status.Win32ExitCode != 0 || status.ServiceSpecificExitCode != 0) {
 		return 1
 	}
 	return 0
