@@ -11,10 +11,14 @@ import (
 // ReadPrivateFile reads bounded TLS material from the very handle whose identity
 // and owner/DACL are validated, retaining every path component while reading.
 func ReadPrivateFile(path string, limit int64) ([]byte, error) {
+	return (*Policy)(nil).ReadPrivateFile(path, limit)
+}
+
+func (policy *Policy) ReadPrivateFile(path string, limit int64) ([]byte, error) {
 	if limit < 1 || limit > 1<<20 {
 		return nil, errors.New("invalid private file bound")
 	}
-	handles, err := openCheckedPathAccess(path, false, false, windows.READ_CONTROL|windows.GENERIC_READ)
+	handles, err := openCheckedPathPinned(path, false, false, windows.READ_CONTROL|windows.GENERIC_READ, policy.IsService())
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +30,7 @@ func ReadPrivateFile(path string, limit int64) ([]byte, error) {
 		return nil, errors.New("private file open failed")
 	}
 	defer f.Close()
-	if err := restrictedACL(h, false); err != nil {
+	if err := policy.policyACL(h, false, false, false); err != nil {
 		return nil, err
 	}
 	body, err := io.ReadAll(io.LimitReader(f, limit+1))

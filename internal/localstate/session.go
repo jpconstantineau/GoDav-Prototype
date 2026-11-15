@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/config"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localfs"
@@ -28,6 +29,7 @@ type Session struct {
 	accounts    *sqlite.AccountStore
 	ownership   io.Closer
 	settingsPin io.Closer
+	policyPins  []io.Closer
 }
 
 func (s *Session) Settings() config.Settings      { return s.settings }
@@ -41,12 +43,13 @@ func (s *Session) Close() error {
 		failed = s.accounts.Close() != nil
 		s.accounts = nil
 	}
-	for _, closer := range []io.Closer{s.ownership, s.settingsPin} {
+	for _, closer := range append([]io.Closer{s.ownership, s.settingsPin}, s.policyPins...) {
 		if closer != nil && closer.Close() != nil {
 			failed = true
 		}
 	}
 	s.ownership, s.settingsPin = nil, nil
+	s.policyPins = nil
 	if failed {
 		return errors.New("local state close failed")
 	}
@@ -56,6 +59,11 @@ func (s *Session) Close() error {
 // OpenExisting never initializes, migrates, repairs or reseeds state. Both
 // intents retain exclusive process ownership. The intent cannot be upgraded.
 func OpenExisting(ctx context.Context, configPath string, intent Intent) (*Session, error) {
+	return OpenExistingWithPolicy(ctx, configPath, intent, nil)
+}
+
+// OpenExistingWithPolicy uses a session-scoped file policy without granting or repairing access.
+func OpenExistingWithPolicy(ctx context.Context, configPath string, intent Intent, policy *localfs.Policy) (*Session, error) {
 	if intent != ReadOnly && intent != WriteExisting {
 		return nil, errors.New("invalid local state intent")
 	}
@@ -72,26 +80,74 @@ func OpenExisting(ctx context.Context, configPath string, intent Intent) (*Sessi
 	if localfs.CheckPath(path, true) != nil {
 		return nil, errors.New("unsafe settings path")
 	}
-	if localfs.CheckPrivateFile(path) != nil {
-		return nil, errors.New("settings are missing, unsafe or inaccessible")
-	}
-	current, err := config.Load(path)
-	if err != nil {
-		return nil, errors.New("invalid settings")
-	}
-	s := &Session{settings: current}
+	s := &Session{}
 	opened := false
 	defer func() {
 		if !opened {
 			s.Close()
 		}
 	}()
-	s.settingsPin, err = localfs.PinPrivateDirectory(filepath.Dir(path), false)
+	if policy.IsService() {
+		// Protect settings identity and its read-only parent BEFORE the first
+		// pathname-based config read. The same pins survive through session close.
+		parent, pinErr := policy.PinReadOnlyDirectory(filepath.Dir(path))
+		if pinErr != nil {
+			return nil, errors.New("settings directory must be private")
+		}
+		s.policyPins = append(s.policyPins, parent)
+		file, pinErr := policy.PinReadOnlyFile(path)
+		if pinErr != nil {
+			return nil, errors.New("settings are missing, unsafe or inaccessible")
+		}
+		s.policyPins = append(s.policyPins, file)
+	}
+	if policy.CheckReadOnlyFile(path) != nil {
+		return nil, errors.New("settings are missing, unsafe or inaccessible")
+	}
+	current, err := config.Load(path)
+	if err != nil {
+		return nil, errors.New("invalid settings")
+	}
+	s.settings = current
+	s.settingsPin, err = policy.PinReadOnlyDirectory(filepath.Dir(path))
 	if err != nil {
 		return nil, errors.New("settings directory must be private")
 	}
-	if localfs.CheckPrivateDirectory(filepath.Dir(current.DatabasePath)) != nil {
+	if policy.CheckMutableDirectory(filepath.Dir(current.DatabasePath)) != nil {
 		return nil, errors.New("database directory must be private")
+	}
+	if policy.IsService() {
+		// Read-only material must never live in the service-writable database tree.
+		// Retain each checked file and parent, including TLS, for the whole session.
+		for _, file := range []string{path, current.CertFile, current.KeyFile} {
+			dataDir, readDir := filepath.Dir(current.DatabasePath), filepath.Dir(file)
+			dataVolume, readVolume := filepath.VolumeName(dataDir), filepath.VolumeName(readDir)
+			// Rel rejects different volumes, but separate local volumes cannot
+			// contain one another. Both paths still undergo the same canonical,
+			// fixed-drive, no-reparse and ACL validation before any state opens.
+			if dataVolume == "" || readVolume == "" {
+				return nil, errors.New("service read-only material must be outside database directory")
+			}
+			if strings.EqualFold(dataVolume, readVolume) {
+				rel, relErr := filepath.Rel(dataDir, readDir)
+				if relErr != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+					return nil, errors.New("service read-only material must be outside database directory")
+				}
+			}
+			for _, dir := range []bool{true, false} {
+				var pin io.Closer
+				var pinErr error
+				if dir {
+					pin, pinErr = policy.PinReadOnlyDirectory(filepath.Dir(file))
+				} else {
+					pin, pinErr = policy.PinReadOnlyFile(file)
+				}
+				if pinErr != nil {
+					return nil, errors.New("service read-only material is unsafe or inaccessible")
+				}
+				s.policyPins = append(s.policyPins, pin)
+			}
+		}
 	}
 	if localfs.CheckPath(current.DatabasePath, true) != nil {
 		return nil, errors.New("unsafe database path")
@@ -99,7 +155,7 @@ func OpenExisting(ctx context.Context, configPath string, intent Intent) (*Sessi
 	if localfs.CheckPath(current.CertFile, true) != nil || localfs.CheckPath(current.KeyFile, true) != nil {
 		return nil, errors.New("unsafe TLS path")
 	}
-	if localfs.CheckPrivateFile(current.DatabasePath) != nil {
+	if policy.CheckMutableFile(current.DatabasePath) != nil {
 		return nil, errors.New("database is missing, unsafe or inaccessible")
 	}
 	if err := requireNoSidecars(current.DatabasePath); err != nil {
@@ -110,18 +166,18 @@ func OpenExisting(ctx context.Context, configPath string, intent Intent) (*Sessi
 	}
 	// The ownership object retains the checked DB parent. Writers require
 	// restricted file inheritance before SQLite can create rollback journals.
-	s.ownership, err = localfs.AcquireOwnership(current.DatabasePath+".lock", intent == WriteExisting)
+	s.ownership, err = policy.AcquireOwnership(current.DatabasePath+".lock", intent == WriteExisting)
 	if err != nil {
 		return nil, errors.New("database is in use or ownership is unsafe")
 	}
-	if localfs.CheckPrivateFile(path) != nil {
+	if policy.CheckReadOnlyFile(path) != nil {
 		return nil, errors.New("settings are missing, unsafe or inaccessible")
 	}
 	rechecked, err := config.Load(path)
 	if err != nil || rechecked != current {
 		return nil, errors.New("settings changed during initialization")
 	}
-	if localfs.CheckPrivateFile(current.DatabasePath) != nil {
+	if policy.CheckMutableFile(current.DatabasePath) != nil {
 		return nil, errors.New("database is missing, unsafe or inaccessible")
 	}
 	if err := requireNoSidecars(current.DatabasePath); err != nil {

@@ -81,6 +81,14 @@ func openCheckedPath(path string, allowMissing, directory bool) ([]windows.Handl
 }
 
 func openCheckedPathAccess(path string, allowMissing, directory bool, finalAccess uint32) ([]windows.Handle, error) {
+	return openCheckedPathPinned(path, allowMissing, directory, finalAccess, false)
+}
+
+// Attribute/control-only handles do not participate in Windows sharing checks.
+// Service/program pins request data/list access on every retained component so
+// omitting FILE_SHARE_DELETE actually prevents replacement. Personal APIs retain
+// their original access requirements pending a separate compatibility review.
+func openCheckedPathPinned(path string, allowMissing, directory bool, finalAccess uint32, pin bool) ([]windows.Handle, error) {
 	parts, err := localPath(path)
 	if err != nil || (len(parts) == 0 && !directory) {
 		return nil, errUnsafePath
@@ -93,6 +101,9 @@ func openCheckedPathAccess(path string, allowMissing, directory bool, finalAcces
 		}
 		p, _ := windows.UTF16PtrFromString(current)
 		access := uint32(windows.FILE_READ_ATTRIBUTES)
+		if pin {
+			access |= windows.FILE_READ_DATA
+		}
 		if i == len(parts) {
 			access |= finalAccess
 		}
@@ -253,10 +264,14 @@ func (lock *ownership) Close() error {
 }
 
 func AcquireOwnership(path string, requireFileInheritance bool) (io.Closer, error) {
+	return (*Policy)(nil).AcquireOwnership(path, requireFileInheritance)
+}
+
+func (policy *Policy) AcquireOwnership(path string, requireFileInheritance bool) (io.Closer, error) {
 	if err := CheckPath(path, true); err != nil {
 		return nil, err
 	}
-	parents, err := PinPrivateDirectory(filepath.Dir(path), requireFileInheritance)
+	parents, err := policy.pinObject(filepath.Dir(path), true, true, requireFileInheritance || policy.IsService())
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +292,7 @@ func AcquireOwnership(path string, requireFileInheritance bool) (io.Closer, erro
 	}
 	var info windows.ByHandleFileInformation
 	if validatePathHandle(h, path, false) != nil || windows.GetFileInformationByHandle(h, &info) != nil ||
-		info.FileSizeHigh != 0 || info.FileSizeLow != 0 || restrictedACL(h, false) != nil {
+		info.FileSizeHigh != 0 || info.FileSizeLow != 0 || policy.policyACL(h, false, true, false) != nil {
 		windows.CloseHandle(h)
 		return nil, errors.New("bootstrap ownership artifact is unsafe")
 	}

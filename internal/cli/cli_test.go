@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const help = "Usage: godav <command>\n\nCommands:\n  init config [--config <path>] --username <name>  Initialize privately (default: godav.yaml)\n  run server --config <path>  Serve an initialized HTTPS share\n  add user [--config <path>] --username <name>  Add an account offline\n  reset password [--config <path>] --username <name>  Reset an account offline\n  version  Show build identity\n  help     Show this help\n"
+const help = "Usage: godav <command>\n\nCommands:\n  init config [--config <path>] --username <name>  Initialize privately (default: godav.yaml)\n  run server --config <path>  Serve an initialized HTTPS share\n  add user [--config <path>] --username <name>  Add an account offline\n  reset password [--config <path>] --username <name>  Reset an account offline\n  install service --name <name> --config <absolute> --operator-sid <sid> --account <virtual-account>  Register stopped Windows service\n  check/start/stop/uninstall service --name <name> --config <absolute> --operator-sid <sid>  Manage Windows service\n  version  Show build identity\n  help     Show this help\n\nShared Windows state: run server/add user/reset password also accept paired\n  --service-name <name> --operator-sid <sid> (see docs/native-service-contract.md).\n"
 
 func TestHelpDoesNotBootstrap(t *testing.T) {
 	bin := development(t)

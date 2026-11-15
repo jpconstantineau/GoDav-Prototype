@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/localfs"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localstate"
 )
 
@@ -15,7 +16,13 @@ var ErrConsole = errors.New("private interactive console required")
 
 // Change generates a password without accepting or returning secret values. The
 // caller supplies only the platform adapter for a real private console.
-func Change(config, username string, reset bool, openConsole func() (*os.File, error)) (err error) {
+func Change(config, username string, reset bool, openConsole func() (*os.File, error)) error {
+	return ChangeWithPolicy(config, username, reset, openConsole, nil)
+}
+
+// ChangeWithPolicy preserves private console delivery and exclusive ownership
+// while admitting an explicitly selected shared-state file policy.
+func ChangeWithPolicy(config, username string, reset bool, openConsole func() (*os.File, error), policy *localfs.Policy) (err error) {
 	if !auth.ValidUsername(username) {
 		return errors.New("invalid username")
 	}
@@ -26,7 +33,7 @@ func Change(config, username string, reset bool, openConsole func() (*os.File, e
 	defer console.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	state, err := localstate.OpenExisting(ctx, config, localstate.WriteExisting)
+	state, err := localstate.OpenExistingWithPolicy(ctx, config, localstate.WriteExisting, policy)
 	if err != nil {
 		return err
 	}

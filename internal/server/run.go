@@ -30,7 +30,21 @@ var (
 	ErrServing          = errors.New("HTTPS serving failed")
 )
 
-func Run(ctx context.Context, configPath string, identity Identity, output io.Writer) (result error) {
+func Run(ctx context.Context, configPath string, identity Identity, output io.Writer) error {
+	return RunObserved(ctx, configPath, identity, output, nil)
+}
+
+// RunObserved shares the foreground lifecycle with native service hosting.
+// Stopped is delivered after cleanup, including on startup failure.
+func RunObserved(ctx context.Context, configPath string, identity Identity, output io.Writer, observer Observer) error {
+	return RunWithPolicy(ctx, configPath, identity, output, observer, nil)
+}
+
+// RunWithPolicy retains the shared server lifecycle with a session-scoped file
+// policy. The caller must bind native service identity before constructing it.
+func RunWithPolicy(ctx context.Context, configPath string, identity Identity, output io.Writer, observer Observer, policy *localfs.Policy) (result error) {
+	observer.report(Starting, nil)
+	defer func() { observer.report(Stopped, result) }()
 	muxSetting := ""
 	for _, entry := range strings.Split(os.Getenv("GODEBUG"), ",") {
 		if key, value, ok := strings.Cut(entry, "="); ok && key == "httpmuxgo121" {
@@ -40,7 +54,7 @@ func Run(ctx context.Context, configPath string, identity Identity, output io.Wr
 	if muxSetting == "1" {
 		return errors.New("legacy HTTP routing unsupported")
 	}
-	state, err := localstate.OpenExisting(ctx, configPath, localstate.WriteExisting)
+	state, err := localstate.OpenExistingWithPolicy(ctx, configPath, localstate.WriteExisting, policy)
 	if err != nil {
 		return err
 	}
@@ -70,11 +84,11 @@ func Run(ctx context.Context, configPath string, identity Identity, output io.Wr
 	if settings.DAVPrefix != "/dav/" {
 		return errors.New("unsupported DAV prefix")
 	}
-	certPEM, err := localfs.ReadPrivateFile(settings.CertFile, 1<<20)
+	certPEM, err := policy.ReadPrivateFile(settings.CertFile, 1<<20)
 	if err != nil {
 		return errors.New("TLS material unavailable")
 	}
-	keyPEM, err := localfs.ReadPrivateFile(settings.KeyFile, 1<<20)
+	keyPEM, err := policy.ReadPrivateFile(settings.KeyFile, 1<<20)
 	if err != nil {
 		return errors.New("TLS material unavailable")
 	}
@@ -137,6 +151,7 @@ func Run(ctx context.Context, configPath string, identity Identity, output io.Wr
 		done <- srv.Serve(tls.NewListener(&boundedListener{Listener: listener, permits: make(chan struct{}, maxConnections), logger: logger}, srv.TLSConfig))
 	}()
 	ready = true
+	observer.report(Ready, nil)
 	logger.Info("ready", "revision", identity.Revision, "build-time", identity.BuildTime, "source", identity.Source)
 	select {
 	case serveErr := <-done:
@@ -145,6 +160,7 @@ func Run(ctx context.Context, configPath string, identity Identity, output io.Wr
 			result = ErrServing
 		}
 		users.stop()
+		observer.report(Stopping, nil)
 		cancelRequests()
 		result = errors.Join(result, finishRequests(srv, users, logger))
 		return result
@@ -152,6 +168,7 @@ func Run(ctx context.Context, configPath string, identity Identity, output io.Wr
 	}
 	stopStarted = time.Now()
 	users.stop()
+	observer.report(Stopping, nil)
 	logger.Info("shutdown", "phase", "stop-admission")
 	logger.Info("shutdown", "phase", "draining", "grace", settings.ShutdownGrace)
 	stop, cancel := context.WithTimeout(context.Background(), settings.ShutdownGrace)
