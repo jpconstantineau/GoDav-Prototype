@@ -1,0 +1,195 @@
+// Package server owns the HTTPS process lifecycle over an existing local session.
+package server
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"io"
+	"log"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/jpconstantineau/GoDav-Prototype/internal/dav"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/localfs"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/localstate"
+)
+
+type Identity struct{ Revision, BuildTime, Source string }
+
+var (
+	ErrShutdownDeadline = errors.New("shutdown deadline expired")
+	ErrShutdownFailed   = errors.New("shutdown failed")
+	ErrServing          = errors.New("HTTPS serving failed")
+)
+
+func Run(ctx context.Context, configPath string, identity Identity, output io.Writer) error {
+	return RunObserved(ctx, configPath, identity, output, nil)
+}
+
+// RunObserved shares the foreground lifecycle with native service hosting.
+// Stopped is delivered after cleanup, including on startup failure.
+func RunObserved(ctx context.Context, configPath string, identity Identity, output io.Writer, observer Observer) error {
+	return RunWithPolicy(ctx, configPath, identity, output, observer, nil)
+}
+
+// RunWithPolicy retains the shared server lifecycle with a session-scoped file
+// policy. The caller must bind native service identity before constructing it.
+func RunWithPolicy(ctx context.Context, configPath string, identity Identity, output io.Writer, observer Observer, policy *localfs.Policy) (result error) {
+	observer.report(Starting, nil)
+	defer func() { observer.report(Stopped, result) }()
+	muxSetting := ""
+	for _, entry := range strings.Split(os.Getenv("GODEBUG"), ",") {
+		if key, value, ok := strings.Cut(entry, "="); ok && key == "httpmuxgo121" {
+			muxSetting = value
+		}
+	}
+	if muxSetting == "1" {
+		return errors.New("legacy HTTP routing unsupported")
+	}
+	state, err := localstate.OpenExistingWithPolicy(ctx, configPath, localstate.WriteExisting, policy)
+	if err != nil {
+		return err
+	}
+	var logger *slog.Logger
+	ready := false
+	var stopStarted time.Time
+	defer func() {
+		if ready {
+			logger.Info("shutdown", "phase", "closing-state")
+		}
+		if state.Close() != nil {
+			result = errors.Join(result, ErrShutdownFailed)
+		}
+		if ready {
+			outcome := "clean"
+			if errors.Is(result, ErrShutdownFailed) {
+				outcome = "failure"
+			} else if errors.Is(result, ErrShutdownDeadline) {
+				outcome = "cancelled"
+			} else if result != nil {
+				outcome = "failure"
+			}
+			logger.Info("stopped", "result", outcome, "duration", time.Since(stopStarted))
+		}
+	}()
+	settings := state.Settings()
+	if settings.DAVPrefix != "/dav/" {
+		return errors.New("unsupported DAV prefix")
+	}
+	certPEM, err := policy.ReadPrivateFile(settings.CertFile, 1<<20)
+	if err != nil {
+		return errors.New("TLS material unavailable")
+	}
+	keyPEM, err := policy.ReadPrivateFile(settings.KeyFile, 1<<20)
+	if err != nil {
+		return errors.New("TLS material unavailable")
+	}
+	defer clear(keyPEM)
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return errors.New("TLS material invalid")
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return errors.New("TLS certificate invalid")
+	}
+	pair.Leaf = leaf
+	serverUsage := len(leaf.ExtKeyUsage) == 0
+	for _, usage := range leaf.ExtKeyUsage {
+		if usage == x509.ExtKeyUsageServerAuth || usage == x509.ExtKeyUsageAny {
+			serverUsage = true
+		}
+	}
+	if !serverUsage || len(leaf.UnhandledCriticalExtensions) > 0 || (leaf.KeyUsage != 0 && leaf.KeyUsage&x509.KeyUsageDigitalSignature == 0) {
+		return errors.New("TLS certificate usage invalid")
+	}
+	origin, _ := url.Parse(settings.PublicOrigin)
+	now := time.Now()
+	if pair.Leaf == nil || pair.Leaf.VerifyHostname(origin.Hostname()) != nil || now.Before(pair.Leaf.NotBefore) || !now.Before(pair.Leaf.NotAfter) {
+		return errors.New("TLS certificate invalid")
+	}
+	logger = slog.New(slog.NewTextHandler(output, nil))
+	listener, err := net.Listen("tcp", settings.ListenAddress)
+	if err != nil {
+		return errors.New("HTTPS bind failed")
+	}
+	defer listener.Close()
+	if err := state.Accounts().PrepareNamespace(ctx); err != nil {
+		return errors.New("namespace preparation failed")
+	}
+	if err := state.Accounts().PrepareFiles(ctx); err != nil {
+		return errors.New("file preparation failed")
+	}
+	users := &requestUsers{logger: logger}
+	requestCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
+	protocols := &http.Protocols{}
+	protocols.SetHTTP1(true)
+	srv := &http.Server{
+		Handler:                      dav.Trace(logger, users.guard(dav.Handler(state.Accounts(), files.New(state.Accounts()), settings.PublicOrigin, settings.MaxFileBytes))),
+		Protocols:                    protocols,
+		BaseContext:                  func(net.Listener) context.Context { return requestCtx },
+		DisableGeneralOptionsHandler: true,
+		TLSConfig:                    &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12},
+		ReadHeaderTimeout:            5 * time.Second,
+		ReadTimeout:                  10 * time.Second,
+		WriteTimeout:                 10 * time.Second,
+		IdleTimeout:                  30 * time.Second,
+		MaxHeaderBytes:               16 << 10,
+		MaxHeaderValueCount:          100,
+		ErrorLog:                     log.New(transportLog{logger}, "", 0),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.Serve(tls.NewListener(&boundedListener{Listener: listener, permits: make(chan struct{}, maxConnections), logger: logger}, srv.TLSConfig))
+	}()
+	ready = true
+	observer.report(Ready, nil)
+	logger.Info("ready", "revision", identity.Revision, "build-time", identity.BuildTime, "source", identity.Source)
+	select {
+	case serveErr := <-done:
+		stopStarted = time.Now()
+		if !errors.Is(serveErr, http.ErrServerClosed) {
+			result = ErrServing
+		}
+		users.stop()
+		observer.report(Stopping, nil)
+		cancelRequests()
+		result = errors.Join(result, finishRequests(srv, users, logger))
+		return result
+	case <-ctx.Done():
+	}
+	stopStarted = time.Now()
+	users.stop()
+	observer.report(Stopping, nil)
+	logger.Info("shutdown", "phase", "stop-admission")
+	logger.Info("shutdown", "phase", "draining", "grace", settings.ShutdownGrace)
+	stop, cancel := context.WithTimeout(context.Background(), settings.ShutdownGrace)
+	err = srv.Shutdown(stop)
+	cancel()
+	if err != nil {
+		result = ErrShutdownDeadline
+		if !errors.Is(err, context.DeadlineExceeded) {
+			result = ErrShutdownFailed
+		}
+		logger.Warn("shutdown", "phase", "cancelling")
+	}
+	cancelRequests()
+	result = errors.Join(result, finishRequests(srv, users, logger))
+	<-done
+	return result
+}
+
+type transportLog struct{ logger *slog.Logger }
+
+func (t transportLog) Write(p []byte) (int, error) {
+	t.logger.Warn("transport failure")
+	return len(p), nil
+}
