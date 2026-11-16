@@ -6,6 +6,7 @@ support. Runtime acceptance remains incomplete.
 ## References
 
 - [Build and release](docs/build-identity.md): build or identify an executable.
+- [Disposable HTTP test mode](docs/http-test-mode.md): anonymous localhost-only Explorer / VS Code testing.
 - [Operations](docs/operations.md): initialize, manage accounts, configure HTTPS or provision a service.
 - [WebDAV behavior](docs/webdav-behavior.md): supported methods, names, metadata and locks.
 - [Storage and lifecycle](docs/storage-and-lifecycle.md): persistence, ownership, budgets and shutdown.

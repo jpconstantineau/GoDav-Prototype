@@ -14,7 +14,9 @@ type authority struct {
 	port int
 }
 
-func parseAuthority(raw string) (authority, bool) {
+func parseAuthority(raw string) (authority, bool) { return parseAuthorityScheme(raw, "https") }
+
+func parseAuthorityScheme(raw, scheme string) (authority, bool) {
 	if raw == "" || strings.ContainsAny(raw, "/\\?#%@") {
 		return authority{}, false
 	}
@@ -23,7 +25,7 @@ func parseAuthority(raw string) (authority, bool) {
 			return authority{}, false
 		}
 	}
-	u, err := url.Parse("https://" + raw)
+	u, err := url.Parse(scheme + "://" + raw)
 	if err != nil || u.Host != raw || u.User != nil || u.Hostname() == "" {
 		return authority{}, false
 	}
@@ -35,6 +37,9 @@ func parseAuthority(raw string) (authority, bool) {
 		host = ip.String()
 	}
 	port := 443
+	if scheme == "http" {
+		port = 80
+	}
 	if text := u.Port(); text != "" {
 		for _, c := range text {
 			if c < '0' || c > '9' {
@@ -83,8 +88,19 @@ func checkedPath(raw string) (string, bool) {
 }
 
 func routeStatus(r *http.Request, expected authority) int {
-	actual, ok := parseAuthority(r.Host)
-	if !ok || actual != expected || r.TLS == nil {
+	return routeStatusTransport(r, expected, "https")
+}
+
+func requestScheme(r *http.Request) string {
+	if r.TLS == nil {
+		return "http"
+	}
+	return "https"
+}
+
+func routeStatusTransport(r *http.Request, expected authority, scheme string) int {
+	actual, ok := parseAuthorityScheme(r.Host, scheme)
+	if !ok || actual != expected || requestScheme(r) != scheme {
 		return 400
 	}
 	// Reject absolute-form, authority-form and asterisk-form requests rather
@@ -105,10 +121,10 @@ func routeStatus(r *http.Request, expected authority) int {
 			return 400
 		}
 		origin, err := url.Parse(origins[0])
-		if err != nil || origin.Scheme != "https" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" || strings.Contains(origins[0], "#") {
+		if err != nil || origin.Scheme != scheme || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" || strings.Contains(origins[0], "#") {
 			return 400
 		}
-		a, ok := parseAuthority(origin.Host)
+		a, ok := parseAuthorityScheme(origin.Host, scheme)
 		if !ok || a != expected {
 			return 400
 		}
@@ -122,11 +138,11 @@ func routeStatus(r *http.Request, expected authority) int {
 		if err != nil || destination.Opaque != "" || destination.Scheme == "" || destination.Host == "" || destination.User != nil || destination.RawQuery != "" || destination.ForceQuery || destination.Fragment != "" || strings.Contains(raw, "#") {
 			return 400
 		}
-		a, ok := parseAuthority(destination.Host)
+		a, ok := parseAuthorityScheme(destination.Host, scheme)
 		if !ok {
 			return 400
 		}
-		if destination.Scheme != "https" || a != expected {
+		if destination.Scheme != scheme || a != expected {
 			return 502
 		}
 		path, ok := checkedPath(destination.EscapedPath())
