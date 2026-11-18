@@ -74,26 +74,38 @@ func TestMCPFileToolsAcrossWebDAV(t *testing.T) {
 			dav("MKCOL", "Documents", "", nil, 201)
 			dav("MKCOL", "Documents/folder", "", nil, 201)
 			dav("MKCOL", "Outside", "", nil, 201)
+			dav("MKCOL", "Skills", "", nil, 201)
 			dav("PUT", "Outside/private.txt", "outside", nil, 201)
+			dav("PUT", "Outside/nested-note.txt", "outside", nil, 201)
+			dav("PUT", "Skills/nested-note.txt", "outside", nil, 201)
+			dav("PUT", "Documents/folder/Nested-Note.TXT", "inside\n", nil, 201)
 			dav("PUT", "Documents/source.txt", "first\n", nil, 201)
 			var tools struct {
 				Tools []struct {
-					Name string `json:"name"`
+					Name        string `json:"name"`
+					Description string `json:"description"`
 				} `json:"tools"`
 			}
 			mcpResult(t, client, f, "tools/list", map[string]any{}, version, &tools)
-			seen := map[string]bool{}
+			seen := map[string]string{}
 			for _, tool := range tools.Tools {
-				seen[tool.Name] = true
+				seen[tool.Name] = tool.Description
 			}
-			for _, tool := range []string{"list_files", "read_file"} {
-				if !seen[tool] {
+			for _, tool := range []string{"list_files", "read_file", "search_files"} {
+				if seen[tool] == "" {
 					t.Fatalf("%s absent", tool)
 				}
 			}
+			if !strings.Contains(seen["list_skills"], "call get_skill") || !strings.Contains(seen["list_files"], "does not list other libraries or skills") {
+				t.Fatal("missing discovery guidance in tools/list")
+			}
 			for _, tool := range []string{"create_file", "edit_file", "delete_file"} {
-				if seen[tool] != writes {
+				description, present := seen[tool]
+				if present != writes {
 					t.Fatalf("%s visibility incorrect", tool)
+				}
+				if present && !strings.Contains(description, "A WebDAV lock can block this change; do not try to bypass it.") {
+					t.Fatalf("%s missing lock guidance", tool)
 				}
 			}
 			var list struct {
@@ -105,11 +117,26 @@ func TestMCPFileToolsAcrossWebDAV(t *testing.T) {
 			if len(list.Entries) != 2 || list.Entries[0].Name != "folder" || list.Entries[1].Name != "source.txt" {
 				t.Fatalf("unexpected listing: %+v", list)
 			}
+			call("list_files", map[string]any{"path": "../Skills"}, false)
+			call("search_files", map[string]any{"path": "../Skills", "query": "nested-note"}, false)
+			var search struct {
+				Entries []struct {
+					Path string `json:"path"`
+					File bool   `json:"file"`
+				} `json:"entries"`
+				Partial bool `json:"partial"`
+			}
+			if err := json.Unmarshal(call("search_files", map[string]any{"path": "", "query": "NESTED-note"}, true), &search); err != nil || search.Partial || len(search.Entries) != 1 || search.Entries[0].Path != "folder/Nested-Note.TXT" || !search.Entries[0].File {
+				t.Fatalf("unexpected search result: %+v, %v", search, err)
+			}
 			var read struct {
 				Content string `json:"content"`
 				File    struct {
 					ETag string `json:"etag"`
 				} `json:"file"`
+			}
+			if err := json.Unmarshal(call("read_file", map[string]any{"path": search.Entries[0].Path}, true), &read); err != nil || read.Content != "inside\n" || read.File.ETag == "" {
+				t.Fatalf("read from search result: %+v, %v", read, err)
 			}
 			if err := json.Unmarshal(call("read_file", map[string]any{"path": "source.txt"}, true), &read); err != nil || read.Content != "first\n" || read.File.ETag == "" {
 				t.Fatalf("read: %+v, %v", read, err)
