@@ -50,6 +50,7 @@ func Tools() []Descriptor {
 	etag := str("Exact strong ETag returned by read_file/list_files; required for atomic conflict checking.")
 	content := map[string]any{"type": "string", "maxLength": MaxContentBytes, "description": "Complete UTF-8 text, at most 65536 encoded bytes."}
 	return []Descriptor{
+		searchDescriptor(),
 		{"list_files", "List files and folders directly inside one folder in the configured file library. Use an empty path to list the library root. This does not list other libraries or skills. Pages can shift if files change between calls.", schema(map[string]any{"path": path, "offset": map[string]any{"type": "integer", "minimum": 0, "maximum": files.MaxChildren}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": MaxListEntries}}, "path")},
 		{"read_file", "Read a UTF-8 text file up to 65536 bytes. The returned ETag identifies the version read; pass it to edit_file or delete_file to avoid changing a newer version. Larger or binary files are refused.", schema(map[string]any{"path": path}, "path")},
 		{"create_file", "Create one UTF-8 text file without overwriting. The parent folder must exist. A WebDAV lock can block this change; do not try to bypass it.", schema(map[string]any{"path": path, "content": content}, "path", "content")},
@@ -123,6 +124,9 @@ func (h *Handler) resolve(path string, directory bool) (string, error) {
 func (h *Handler) Call(ctx context.Context, principal, name string, raw json.RawMessage) (any, error) {
 	if principal == "" || len(raw) > MaxArgumentBytes || !utf8.Valid(raw) {
 		return nil, files.ErrInvalid
+	}
+	if name == "search_files" {
+		return h.search(ctx, principal, raw)
 	}
 	var a arguments
 	dec := json.NewDecoder(bytes.NewReader(raw))
