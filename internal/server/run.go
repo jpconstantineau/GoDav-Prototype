@@ -113,7 +113,6 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 		return errors.New("file preparation failed")
 	}
 	users := &requestUsers{logger: logger}
-	requestCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
 	protocols := &http.Protocols{}
 	protocols.SetHTTP1(true)
 	fileService := files.New(state.Accounts())
@@ -130,6 +129,7 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 	default:
 		handler = dav.Handler(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes)
 	}
+	requestCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
 	srv := &http.Server{
 		Handler:                      dav.Trace(logger, users.guard(handler)),
 		Protocols:                    protocols,
