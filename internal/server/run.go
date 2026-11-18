@@ -16,10 +16,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jpconstantineau/GoDav-Prototype/internal/config"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/dav"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localfs"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localstate"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/sqlite"
 )
 
 type Identity struct{ Revision, BuildTime, Source string }
@@ -45,19 +47,24 @@ func RunObserved(ctx context.Context, configPath string, identity Identity, outp
 func RunWithPolicy(ctx context.Context, configPath string, identity Identity, output io.Writer, observer Observer, policy *localfs.Policy) (result error) {
 	observer.report(Starting, nil)
 	defer func() { observer.report(Stopped, result) }()
-	muxSetting := ""
-	for _, entry := range strings.Split(os.Getenv("GODEBUG"), ",") {
-		if key, value, ok := strings.Cut(entry, "="); ok && key == "httpmuxgo121" {
-			muxSetting = value
-		}
-	}
-	if muxSetting == "1" {
+	if !routingSupported() {
 		return errors.New("legacy HTTP routing unsupported")
 	}
 	state, err := localstate.OpenExistingWithPolicy(ctx, configPath, localstate.WriteExisting, policy)
 	if err != nil {
 		return err
 	}
+	return serveState(ctx, state, identity, output, observer, policy, false)
+}
+
+type serverState interface {
+	Settings() config.Settings
+	Accounts() *sqlite.AccountStore
+	Close() error
+}
+
+// Both transports share admission, storage preparation, limits and shutdown.
+func serveState(ctx context.Context, state serverState, identity Identity, output io.Writer, observer Observer, policy *localfs.Policy, httpTest bool) (result error) {
 	var logger *slog.Logger
 	ready := false
 	var stopStarted time.Time
@@ -84,37 +91,13 @@ func RunWithPolicy(ctx context.Context, configPath string, identity Identity, ou
 	if settings.DAVPrefix != "/dav/" {
 		return errors.New("unsupported DAV prefix")
 	}
-	certPEM, err := policy.ReadPrivateFile(settings.CertFile, 1<<20)
-	if err != nil {
-		return errors.New("TLS material unavailable")
-	}
-	keyPEM, err := policy.ReadPrivateFile(settings.KeyFile, 1<<20)
-	if err != nil {
-		return errors.New("TLS material unavailable")
-	}
-	defer clear(keyPEM)
-	pair, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return errors.New("TLS material invalid")
-	}
-	leaf, err := x509.ParseCertificate(pair.Certificate[0])
-	if err != nil {
-		return errors.New("TLS certificate invalid")
-	}
-	pair.Leaf = leaf
-	serverUsage := len(leaf.ExtKeyUsage) == 0
-	for _, usage := range leaf.ExtKeyUsage {
-		if usage == x509.ExtKeyUsageServerAuth || usage == x509.ExtKeyUsageAny {
-			serverUsage = true
+	var tlsConfig *tls.Config
+	if !httpTest {
+		var err error
+		tlsConfig, err = loadTLS(settings, policy)
+		if err != nil {
+			return err
 		}
-	}
-	if !serverUsage || len(leaf.UnhandledCriticalExtensions) > 0 || (leaf.KeyUsage != 0 && leaf.KeyUsage&x509.KeyUsageDigitalSignature == 0) {
-		return errors.New("TLS certificate usage invalid")
-	}
-	origin, _ := url.Parse(settings.PublicOrigin)
-	now := time.Now()
-	if pair.Leaf == nil || pair.Leaf.VerifyHostname(origin.Hostname()) != nil || now.Before(pair.Leaf.NotBefore) || !now.Before(pair.Leaf.NotAfter) {
-		return errors.New("TLS certificate invalid")
 	}
 	logger = slog.New(slog.NewTextHandler(output, nil))
 	listener, err := net.Listen("tcp", settings.ListenAddress)
@@ -132,12 +115,16 @@ func RunWithPolicy(ctx context.Context, configPath string, identity Identity, ou
 	requestCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
 	protocols := &http.Protocols{}
 	protocols.SetHTTP1(true)
+	handler := dav.Handler(state.Accounts(), files.New(state.Accounts()), settings.PublicOrigin, settings.MaxFileBytes)
+	if httpTest {
+		handler = dav.HTTPTestHandler(files.New(state.Accounts()), settings.PublicOrigin, settings.MaxFileBytes)
+	}
 	srv := &http.Server{
-		Handler:                      dav.Trace(logger, users.guard(dav.Handler(state.Accounts(), files.New(state.Accounts()), settings.PublicOrigin, settings.MaxFileBytes))),
+		Handler:                      dav.Trace(logger, users.guard(handler)),
 		Protocols:                    protocols,
 		BaseContext:                  func(net.Listener) context.Context { return requestCtx },
 		DisableGeneralOptionsHandler: true,
-		TLSConfig:                    &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12},
+		TLSConfig:                    tlsConfig,
 		ReadHeaderTimeout:            5 * time.Second,
 		ReadTimeout:                  10 * time.Second,
 		WriteTimeout:                 10 * time.Second,
@@ -146,12 +133,25 @@ func RunWithPolicy(ctx context.Context, configPath string, identity Identity, ou
 		MaxHeaderValueCount:          100,
 		ErrorLog:                     log.New(transportLog{logger}, "", 0),
 	}
+	// Windows WebClient can hold a separate idle connection per operation.
+	// Test mode closes responses instead of exhausting the bounded socket pool.
+	// The authenticated HTTPS transport retains its existing keepalive behavior.
+	if httpTest {
+		srv.SetKeepAlivesEnabled(false)
+	}
 	done := make(chan error, 1)
 	go func() {
-		done <- srv.Serve(tls.NewListener(&boundedListener{Listener: listener, permits: make(chan struct{}, maxConnections), logger: logger}, srv.TLSConfig))
+		var transport net.Listener = &boundedListener{Listener: listener, permits: make(chan struct{}, maxConnections), logger: logger}
+		if !httpTest {
+			transport = tls.NewListener(transport, srv.TLSConfig)
+		}
+		done <- srv.Serve(transport)
 	}()
 	ready = true
 	observer.report(Ready, nil)
+	if httpTest {
+		logger.Warn("anonymous HTTP test mode: disposable data; all local users can access", "url", settings.PublicOrigin+"/dav/")
+	}
 	logger.Info("ready", "revision", identity.Revision, "build-time", identity.BuildTime, "source", identity.Source)
 	select {
 	case serveErr := <-done:
@@ -192,4 +192,54 @@ type transportLog struct{ logger *slog.Logger }
 func (t transportLog) Write(p []byte) (int, error) {
 	t.logger.Warn("transport failure")
 	return len(p), nil
+}
+
+func loadTLS(settings config.Settings, policy *localfs.Policy) (*tls.Config, error) {
+	certPEM, err := policy.ReadPrivateFile(settings.CertFile, 1<<20)
+	if err != nil {
+		return nil, errors.New("TLS material unavailable")
+	}
+	keyPEM, err := policy.ReadPrivateFile(settings.KeyFile, 1<<20)
+	if err != nil {
+		return nil, errors.New("TLS material unavailable")
+	}
+	defer clear(keyPEM)
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, errors.New("TLS material invalid")
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return nil, errors.New("TLS certificate invalid")
+	}
+	pair.Leaf = leaf
+	serverUsage := len(leaf.ExtKeyUsage) == 0
+	for _, usage := range leaf.ExtKeyUsage {
+		if usage == x509.ExtKeyUsageServerAuth || usage == x509.ExtKeyUsageAny {
+			serverUsage = true
+		}
+	}
+	if !serverUsage || len(leaf.UnhandledCriticalExtensions) > 0 || (leaf.KeyUsage != 0 && leaf.KeyUsage&x509.KeyUsageDigitalSignature == 0) {
+		return nil, errors.New("TLS certificate usage invalid")
+	}
+	origin, _ := url.Parse(settings.PublicOrigin)
+	now := time.Now()
+	if pair.Leaf == nil || pair.Leaf.VerifyHostname(origin.Hostname()) != nil || now.Before(pair.Leaf.NotBefore) || !now.Before(pair.Leaf.NotAfter) {
+		return nil, errors.New("TLS certificate invalid")
+	}
+
+	return &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}, nil
+}
+
+func routingSupported() bool {
+	muxSetting := ""
+	for _, entry := range strings.Split(os.Getenv("GODEBUG"), ",") {
+		if key, value, ok := strings.Cut(entry, "="); ok && key == "httpmuxgo121" {
+			muxSetting = value
+		}
+	}
+	if muxSetting == "1" {
+		return false
+	}
+	return true
 }

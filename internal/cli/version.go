@@ -12,9 +12,12 @@ var revision = "unknown"
 var buildTime = "unknown"
 var sourceState = "unknown"
 
-const help = "Usage: godav <command>\n\nCommands:\n  init config [--config <path>] --username <name>  Initialize privately (default: godav.yaml)\n  run server --config <path>  Serve an initialized HTTPS share\n  add user [--config <path>] --username <name>  Add an account offline\n  reset password [--config <path>] --username <name>  Reset an account offline\n  install service --name <name> --config <absolute> --operator-sid <sid> --account <virtual-account>  Register stopped Windows service\n  check/start/stop/uninstall service --name <name> --config <absolute> --operator-sid <sid>  Manage Windows service\n  version  Show build identity\n  help     Show this help\n\nShared Windows state: run server/add user/reset password also accept paired\n  --service-name <name> --operator-sid <sid> (see docs/native-service-contract.md).\n"
+const help = "Usage: godav <command>\n\nCommands:\n  init config [--config <path>] --username <name>  Initialize privately (default: godav.yaml)\n  run server --config <path>  Serve an initialized HTTPS share\n  run http-test [--port <1-65535>]  Anonymous disposable localhost HTTP (default 8080)\n  add user [--config <path>] --username <name>  Add an account offline\n  reset password [--config <path>] --username <name>  Reset an account offline\n  install service --name <name> --config <absolute> --operator-sid <sid> --account <virtual-account>  Register stopped Windows service\n  check/start/stop/uninstall service --name <name> --config <absolute> --operator-sid <sid>  Manage Windows service\n  version  Show build identity\n  help     Show this help\n\nShared Windows state: run server/add user/reset password also accept paired\n  --service-name <name> --operator-sid <sid> (see docs/native-service-contract.md).\n"
 
 func Run(args []string, stdout, stderr io.Writer) int {
+	if len(args) >= 2 && args[0] == "run" && args[1] == "http-test" {
+		return runHTTPTest(args[2:], stdout, stderr)
+	}
 	if len(args) >= 2 && args[1] == "service" {
 		switch args[0] {
 		case "install", "check", "start", "stop", "uninstall":

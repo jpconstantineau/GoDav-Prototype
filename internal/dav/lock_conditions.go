@@ -182,9 +182,9 @@ func ifResourcePath(r *http.Request, raw string) (string, error) {
 		return "", files.ErrConditionSyntax
 	}
 	if u.IsAbs() {
-		a, ok := parseAuthority(u.Host)
-		expected, valid := parseAuthority(r.Host)
-		if u.Scheme != "https" || !ok || !valid || a != expected {
+		a, ok := parseAuthorityScheme(u.Host, requestScheme(r))
+		expected, valid := parseAuthorityScheme(r.Host, requestScheme(r))
+		if u.Scheme != requestScheme(r) || !ok || !valid || a != expected {
 			return "", files.ErrConditionSyntax
 		}
 	} else if u.Host != "" || !strings.HasPrefix(raw, "/") {

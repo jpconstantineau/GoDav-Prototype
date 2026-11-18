@@ -122,7 +122,7 @@ func safeMoveDestination(r *http.Request) string {
 		return "<invalid>"
 	}
 	u, err := url.Parse(values[0])
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(values[0], "#") {
+	if err != nil || u.Scheme != requestScheme(r) || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(values[0], "#") {
 		return "<invalid>"
 	}
 	path, ok := checkedPath(u.EscapedPath())
