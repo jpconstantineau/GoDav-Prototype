@@ -50,11 +50,11 @@ func Tools() []Descriptor {
 	etag := str("Exact strong ETag returned by read_file/list_files; required for atomic conflict checking.")
 	content := map[string]any{"type": "string", "maxLength": MaxContentBytes, "description": "Complete UTF-8 text, at most 65536 encoded bytes."}
 	return []Descriptor{
-		{"list_files", "List one directory, without recursion. Entries include files and directories; pagination is best effort across concurrent changes.", schema(map[string]any{"path": path, "offset": map[string]any{"type": "integer", "minimum": 0, "maximum": files.MaxChildren}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": MaxListEntries}}, "path")},
-		{"read_file", "Read one UTF-8 text file of at most 65536 bytes and its ETag. Larger or binary files are refused.", schema(map[string]any{"path": path}, "path")},
-		{"create_file", "Create one UTF-8 text file without overwriting. Parent must already exist; WebDAV locks apply.", schema(map[string]any{"path": path, "content": content}, "path", "content")},
-		{"edit_file", "Replace a file's complete UTF-8 text only if expected_etag still matches. WebDAV locks apply.", schema(map[string]any{"path": path, "content": content, "expected_etag": etag}, "path", "content", "expected_etag")},
-		{"delete_file", "Delete one file only if expected_etag still matches. Never deletes a directory; WebDAV locks apply.", schema(map[string]any{"path": path, "expected_etag": etag}, "path", "expected_etag")},
+		{"list_files", "List files and folders directly inside one folder in the configured file library. Use an empty path to list the library root. This does not list other libraries or skills. Pages can shift if files change between calls.", schema(map[string]any{"path": path, "offset": map[string]any{"type": "integer", "minimum": 0, "maximum": files.MaxChildren}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": MaxListEntries}}, "path")},
+		{"read_file", "Read a UTF-8 text file up to 65536 bytes. The returned ETag identifies the version read; pass it to edit_file or delete_file to avoid changing a newer version. Larger or binary files are refused.", schema(map[string]any{"path": path}, "path")},
+		{"create_file", "Create one UTF-8 text file without overwriting. The parent folder must exist. A WebDAV lock can block this change; do not try to bypass it.", schema(map[string]any{"path": path, "content": content}, "path", "content")},
+		{"edit_file", "Replace the entire UTF-8 text of a file only if expected_etag still matches. A WebDAV lock can block this change; do not try to bypass it.", schema(map[string]any{"path": path, "content": content, "expected_etag": etag}, "path", "content", "expected_etag")},
+		{"delete_file", "Delete one file only if expected_etag still matches. Never deletes a folder. A WebDAV lock can block this change; do not try to bypass it.", schema(map[string]any{"path": path, "expected_etag": etag}, "path", "expected_etag")},
 	}
 }
 func (h *Handler) Tools() []Descriptor {

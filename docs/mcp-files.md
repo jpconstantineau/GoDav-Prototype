@@ -6,7 +6,7 @@ The opt-in MCP endpoint can list and read a separate WebDAV collection from the 
 mcp_files_root: /Documents
 ```
 
-Create that collection through authenticated WebDAV. File tool paths are relative to this root; an empty path lists the root. The Documents and Skills roots must not overlap. The same authenticated loopback account and endpoint are used for both. Paths do not name files on the host.
+Create that collection through authenticated WebDAV. File tool paths are relative to this root. An empty path lists the contents of this collection, not all libraries on the server. Skills are not browsable through the file tools; use native MCP Skills or the list_skills and get_skill fallback. The Documents and Skills roots must not overlap. The same authenticated loopback account and endpoint are used for both. Paths do not name files on the host.
 
 - `list_files` lists one directory, up to 100 entries per call, with optional offset and limit.
 - `read_file` returns bounded UTF-8 text and its strong ETag. Binary files are not returned as text.
