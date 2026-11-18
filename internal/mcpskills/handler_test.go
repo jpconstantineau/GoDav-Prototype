@@ -333,3 +333,54 @@ func TestMutationDuringCatalogFailsClosed(t *testing.T) {
 		t.Fatal("published known stale catalog")
 	}
 }
+
+// Use a literal SHA-256 test vector, not the production digest helper: native
+// and fallback parity alone cannot detect the same digest-format bug in both.
+func TestSkillManifestDigestKnownVector(t *testing.T) {
+	h, _ := fixture(t)
+	_, response := rpc(t, h, "skills/get", map[string]any{"uri": "skill://demo/SKILL.md"})
+	if response["error"] != nil {
+		t.Fatal(response)
+	}
+	skill := response["result"].(map[string]any)["skill"].(map[string]any)
+	for _, value := range skill["resources"].([]any) {
+		resource := value.(map[string]any)
+		if resource["uri"] != "skill://demo/references/guide.txt" {
+			continue
+		}
+		// Fixture bytes are exactly "hello\r\n", seven bytes, without BOM.
+		const want = "sha256:cd2eca3535741f27a8ae40c31b0c41d4057a7a7b912b33b9aed86485d1c84676"
+		if resource["digest"] != want || resource["size"] != float64(7) {
+			t.Fatalf("guide digest/size = %v/%v, want %s/7", resource["digest"], resource["size"], want)
+		}
+		return
+	}
+	t.Fatal("guide resource missing from manifest")
+}
+
+func TestSkillEntryMIMEAcrossReadSurfaces(t *testing.T) {
+	h, _ := fixture(t)
+	for _, method := range []string{"resources/read", "tools/call"} {
+		t.Run(method, func(t *testing.T) {
+			params := map[string]any{"uri": "skill://demo/SKILL.md"}
+			if method == "tools/call" {
+				params = map[string]any{"name": "get_skill", "arguments": params}
+			}
+			_, response := rpc(t, h, method, params)
+			if response["error"] != nil {
+				t.Fatal(response)
+			}
+			result := response["result"].(map[string]any)
+			if method == "tools/call" {
+				if result["isError"] == true {
+					t.Fatal(result)
+				}
+				result = result["structuredContent"].(map[string]any)
+			}
+			content := result["contents"].([]any)[0].(map[string]any)
+			if content["mimeType"] != "text/markdown" {
+				t.Fatalf("SKILL.md mimeType = %v, want text/markdown", content["mimeType"])
+			}
+		})
+	}
+}
