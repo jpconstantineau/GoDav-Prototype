@@ -222,7 +222,13 @@ func TestAuthAndHTTPBoundaries(t *testing.T) {
 	if w.Code != 405 {
 		t.Fatal(w.Code)
 	}
-	_, v := rpc(t, h, "server/discover", nil)
+	if got := w.Header().Get("Allow"); got != http.MethodPost {
+		t.Fatalf("Allow = %q, want POST", got)
+	}
+	w, v := rpc(t, h, "server/discover", nil)
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("discovery Content-Type = %q, want application/json", got)
+	}
 	result := v["result"].(map[string]any)
 	if result["capabilities"].(map[string]any)["extensions"] == nil {
 		t.Fatal("no native capability")
