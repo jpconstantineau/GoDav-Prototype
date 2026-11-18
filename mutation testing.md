@@ -154,3 +154,28 @@ Paths are relative to `internal/cli/` unless otherwise indicated. The non-Window
 | service_policy_windows_test.go | Scoped synthetic ACL fixtures, program/file pins, retained operator access and private administration. Reviewed but no weakening mutations. |
 | service_reporting_windows_test.go | Never-started 1077 exception is narrow, errors retained, start/stop and confirmed uninstall outcomes. Existing test kills install Close-error suppression even though service-only suite misses it. |
 | internal/service/manager_test.go; internal/service/dispatch_windows_test.go | Fake SCM control/state transitions, policy match, observed completion, rollback/absence/deadline; dispatcher joins runner cleanup and preserves error causality. Candidate: Close-error propagation and terminal result code. |
+
+## FTS5 content search follow-up
+
+Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`. All six new tests below
+passed on clean source and failed on their corresponding valid mutant.
+Each mutant was applied in isolation and removed before rerunning. No mutants
+or persistent index data are part of the branch.
+
+- F01–F04: `go test ./internal/sqlite -run '^<test>$' -count=1 -timeout=90s` in a scratch checkout.
+- F05: `go test ./internal/mcpfiles -run '^TestContentSearchFilterContract$' -count=1 -timeout=2m` with a temporary Go overlay.
+- F06: `go test -p=2 ./internal/cli -run '^TestMCPContentSearchAcrossWebDAV$' -count=1 -v -timeout=4m` in a scratch checkout with a disposable HTTPS fixture. Use an actual source edit there: the fixture clears `GOFLAGS` for its child build, so the initial overlay attempt did not affect the server executable and is excluded.
+
+| ID | Test | Temporary production change | Causal failure |
+| --- | --- | --- | --- |
+| F01 | `TestContentSearchFullBodyPhraseAndRanking` | In `internal/sqlite/content_search.go`, replace FTS INSERT argument `string(data)` with `string(data[:min(len(data), 65536)])`. | `Documents/deep.txt` was missing when its only match was past 64 KiB. |
+| F02 | `TestContentSearchRefreshAndScopedIdentity` | In `internal/sqlite/content_search.go`, CTE seed `SELECT ?, ?, 0` to `SELECT ?, lower(?), 0`. | Hit `documents/sub/one.txt` instead of canonical `Documents/Sub/one.txt`. |
+| F03 | `TestContentSearchFiltersAndAccurateLimit` | In `internal/sqlite/content_search.go`, upper-date rejection `!hit.Modified.Before(o.ModifiedBefore)` to `hit.Modified.After(o.ModifiedBefore)`. | Incorrectly included `C.txt` at the exclusive upper timestamp; expected only `B.md`. |
+| F04 | `TestContentSearchCapacityAndTemporaryState` | In `internal/sqlite/content_search.go`, change `count > MaxContentSearchNodes` to `count >= MaxContentSearchNodes`. | The exactly 2,048-node subtree incorrectly returned a capacity error. |
+| F05 | `TestContentSearchFilterContract` | In `internal/mcpfiles/content_search.go`, change `opts.Extension = strings.ToLower(a.Extension)` to `opts.Extension = ""`. | Dropped the requested extension filter: got empty, want `.txt`. |
+| F06 | `TestMCPContentSearchAcrossWebDAV` | In `internal/sqlite/content_search.go`, replace the FTS INSERT argument `string(data)` with `string(data[:min(len(data), 64<<10)])`. | The HTTPS result omitted `Large.txt`, whose match occurs after the 64 KiB MCP read limit. |
+
+The clean Windows integration also verified pre-existing content, full-text
+versus path matching, metadata filters, result limits, WebDAV replacement,
+delete and MOVE (including collections moved into and out of the search
+root), MCP create/edit, and reopen. No survivors in this sample.
