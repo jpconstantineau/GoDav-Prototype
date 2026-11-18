@@ -38,6 +38,8 @@ type Settings struct {
 	MCPEnabled           bool
 	MCPSkillsRoot        string // decoded DAV-relative path
 	MCPUsername          string // sole account opted in
+	MCPFilesRoot         string // optional separate decoded DAV-relative path
+	MCPFileWrites        bool
 }
 
 var errSettings = errors.New("invalid or inaccessible settings")
@@ -76,7 +78,15 @@ func Load(filename string) (Settings, error) {
 	keys := []string{"config_version", "listen_address", "public_origin", "dav_prefix", "database_path", "tls", "authentication", "limits"}
 	root, ok := mapping(doc.Content[0], keys...)
 	if !ok {
-		root, ok = mapping(doc.Content[0], append(keys, "mcp_enabled", "mcp_skills_root", "mcp_username")...)
+		keys = append(keys, "mcp_enabled", "mcp_skills_root", "mcp_username")
+		root, ok = mapping(doc.Content[0], keys...)
+	}
+	if !ok {
+		keys = append(keys, "mcp_files_root")
+		root, ok = mapping(doc.Content[0], keys...)
+	}
+	if !ok {
+		root, ok = mapping(doc.Content[0], append(keys, "mcp_file_writes")...)
 	}
 	if !ok {
 		return result, errSettings
@@ -129,15 +139,27 @@ func Load(filename string) (Settings, error) {
 			return Settings{}, errSettings
 		}
 		scope, user := root["mcp_skills_root"], root["mcp_username"]
-		if scope.Kind != yaml.ScalarNode || scope.Tag != "!!str" || user.Kind != yaml.ScalarNode || user.Tag != "!!str" || !auth.ValidUsername(user.Value) {
+		if user.Kind != yaml.ScalarNode || user.Tag != "!!str" || !auth.ValidUsername(user.Value) {
 			return Settings{}, errSettings
 		}
-		relative, ok := strings.CutPrefix(scope.Value, "/")
-		parts, err := files.Components(relative)
-		if !ok || err != nil || len(parts) == 0 || strings.Join(parts, "/") != relative {
+		relative, ok := logicalRoot(scope)
+		if !ok {
 			return Settings{}, errSettings
 		}
 		result.MCPEnabled, result.MCPSkillsRoot, result.MCPUsername = true, relative, user.Value
+		if filesRoot := root["mcp_files_root"]; filesRoot != nil {
+			path, ok := logicalRoot(filesRoot)
+			if !ok || overlappingRoots(relative, path) {
+				return Settings{}, errSettings
+			}
+			result.MCPFilesRoot = path
+		}
+		if writes := root["mcp_file_writes"]; writes != nil {
+			if writes.Kind != yaml.ScalarNode || writes.Tag != "!!bool" || writes.Value != "true" {
+				return Settings{}, errSettings
+			}
+			result.MCPFileWrites = true
+		}
 	}
 	paths := []string{absolute}
 	for _, node := range []*yaml.Node{root["database_path"], tls["cert_file"], tls["key_file"]} {
@@ -166,6 +188,25 @@ func Load(filename string) (Settings, error) {
 		}
 	}
 	return result, nil
+}
+
+func logicalRoot(node *yaml.Node) (string, bool) {
+	if node == nil || node.Kind != yaml.ScalarNode || node.Tag != "!!str" {
+		return "", false
+	}
+	relative, ok := strings.CutPrefix(node.Value, "/")
+	parts, err := files.Components(relative)
+	return relative, ok && err == nil && len(parts) > 0 && strings.Join(parts, "/") == relative
+}
+
+func overlappingRoots(a, b string) bool {
+	as, bs := strings.Split(a, "/"), strings.Split(b, "/")
+	for i := range min(len(as), len(bs)) {
+		if files.Key(as[i]) != files.Key(bs[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func plainNodes(node *yaml.Node) bool {
