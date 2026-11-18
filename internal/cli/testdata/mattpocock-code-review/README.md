@@ -1,0 +1,1 @@
+Complete unchanged package from https://github.com/mattpocock/skills/tree/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/code-review . Files: SKILL.md, agents/openai.yaml. MIT license included. Inert offline test data only. SHA-256 checked in mcp_skills_windows_test.go.

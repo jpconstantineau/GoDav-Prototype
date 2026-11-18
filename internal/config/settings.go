@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/winpath"
 
@@ -34,6 +35,9 @@ type Settings struct {
 	AuthenticationMethod string
 	MaxFileBytes         int64
 	ShutdownGrace        time.Duration
+	MCPEnabled           bool
+	MCPSkillsRoot        string // decoded DAV-relative path
+	MCPUsername          string // sole account opted in
 }
 
 var errSettings = errors.New("invalid or inaccessible settings")
@@ -69,7 +73,11 @@ func Load(filename string) (Settings, error) {
 	if !plainNodes(&doc) {
 		return result, errSettings
 	}
-	root, ok := mapping(doc.Content[0], "config_version", "listen_address", "public_origin", "dav_prefix", "database_path", "tls", "authentication", "limits")
+	keys := []string{"config_version", "listen_address", "public_origin", "dav_prefix", "database_path", "tls", "authentication", "limits"}
+	root, ok := mapping(doc.Content[0], keys...)
+	if !ok {
+		root, ok = mapping(doc.Content[0], append(keys, "mcp_enabled", "mcp_skills_root", "mcp_username")...)
+	}
 	if !ok {
 		return result, errSettings
 	}
@@ -77,7 +85,7 @@ func Load(filename string) (Settings, error) {
 	if !ok {
 		return result, errSettings
 	}
-	auth, ok := mapping(root["authentication"], "method")
+	authentication, ok := mapping(root["authentication"], "method")
 	if !ok {
 		return result, errSettings
 	}
@@ -103,7 +111,7 @@ func Load(filename string) (Settings, error) {
 			return result, errSettings
 		}
 	}
-	for _, node := range []*yaml.Node{root["listen_address"], root["public_origin"], root["dav_prefix"], root["database_path"], tls["cert_file"], tls["key_file"], auth["method"]} {
+	for _, node := range []*yaml.Node{root["listen_address"], root["public_origin"], root["dav_prefix"], root["database_path"], tls["cert_file"], tls["key_file"], authentication["method"]} {
 		if node.Kind != yaml.ScalarNode || node.Tag != "!!str" || node.Value == "" {
 			return result, errSettings
 		}
@@ -111,10 +119,25 @@ func Load(filename string) (Settings, error) {
 	result = Settings{
 		ConfigVersion: version, ListenAddress: root["listen_address"].Value,
 		PublicOrigin: root["public_origin"].Value, DAVPrefix: root["dav_prefix"].Value,
-		AuthenticationMethod: auth["method"].Value, MaxFileBytes: maxBytes, ShutdownGrace: time.Duration(graceMS) * time.Millisecond,
+		AuthenticationMethod: authentication["method"].Value, MaxFileBytes: maxBytes, ShutdownGrace: time.Duration(graceMS) * time.Millisecond,
 	}
 	if result.AuthenticationMethod != "basic" || !validEndpoints(result) || !validPrefix(result.DAVPrefix) {
 		return Settings{}, errSettings
+	}
+	if node := root["mcp_enabled"]; node != nil {
+		if node.Kind != yaml.ScalarNode || node.Tag != "!!bool" || node.Value != "true" {
+			return Settings{}, errSettings
+		}
+		scope, user := root["mcp_skills_root"], root["mcp_username"]
+		if scope.Kind != yaml.ScalarNode || scope.Tag != "!!str" || user.Kind != yaml.ScalarNode || user.Tag != "!!str" || !auth.ValidUsername(user.Value) {
+			return Settings{}, errSettings
+		}
+		relative, ok := strings.CutPrefix(scope.Value, "/")
+		parts, err := files.Components(relative)
+		if !ok || err != nil || len(parts) == 0 || strings.Join(parts, "/") != relative {
+			return Settings{}, errSettings
+		}
+		result.MCPEnabled, result.MCPSkillsRoot, result.MCPUsername = true, relative, user.Value
 	}
 	paths := []string{absolute}
 	for _, node := range []*yaml.Node{root["database_path"], tls["cert_file"], tls["key_file"]} {
@@ -156,7 +179,7 @@ func plainNodes(node *yaml.Node) bool {
 			return false
 		}
 	case yaml.ScalarNode:
-		if node.Tag != "!!str" && node.Tag != "!!int" {
+		if node.Tag != "!!str" && node.Tag != "!!int" && node.Tag != "!!bool" {
 			return false
 		}
 	default:

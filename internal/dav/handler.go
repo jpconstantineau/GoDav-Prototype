@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -19,6 +20,12 @@ type AccountLookup interface {
 }
 
 func Handler(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64) http.Handler {
+	return HandlerWithMCP(accounts, collections, origin, maxBytes, "", nil)
+}
+
+// HandlerWithMCP shares authority checks and the expensive-authentication budget.
+// A nil MCP handler leaves the existing DAV transport and namespace unchanged.
+func HandlerWithMCP(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64, mcpUsername string, mcp http.Handler) http.Handler {
 	u, _ := url.Parse(origin)
 	expected, _ := parseAuthority(u.Host)
 	slots := make(chan struct{}, 2)
@@ -32,7 +39,7 @@ func Handler(accounts AccountLookup, collections *files.Service, origin string, 
 			w.Header().Set("WWW-Authenticate", `Basic realm="GoDav"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		}
-		if code := routeStatus(r, expected); code != 0 {
+		if code := routeStatusTransport(r, expected, "https", mcp != nil); code != 0 {
 			http.Error(w, http.StatusText(code), code)
 			return
 		}
@@ -80,7 +87,16 @@ func Handler(accounts AccountLookup, collections *files.Service, origin string, 
 			reject()
 			return
 		}
-		mux.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), principal)))
+		r = r.WithContext(auth.WithPrincipal(r.Context(), principal))
+		if mcp != nil && r.URL.Path == "/mcp" {
+			if !strings.EqualFold(username, mcpUsername) {
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				return
+			}
+			mcp.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
 	})
 }
 
