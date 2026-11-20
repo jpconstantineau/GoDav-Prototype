@@ -37,9 +37,10 @@ type Settings struct {
 	ShutdownGrace        time.Duration
 	MCPEnabled           bool
 	MCPSkillsRoot        string // decoded DAV-relative path
-	MCPUsername          string // sole account opted in
+	MCPUsername          string // sole default MCP endpoint account
 	MCPFilesRoot         string // optional separate decoded DAV-relative path
 	MCPFileWrites        bool
+	MCPSkillCatalogs     [2]SkillCatalog
 }
 
 var errSettings = errors.New("invalid or inaccessible settings")
@@ -76,6 +77,10 @@ func Load(filename string) (Settings, error) {
 		return result, errSettings
 	}
 	keys := []string{"config_version", "listen_address", "public_origin", "dav_prefix", "database_path", "tls", "authentication", "limits"}
+	catalogsPresent := hasMappingKey(doc.Content[0], "mcp_skill_catalogs")
+	if catalogsPresent {
+		keys = append(keys, "mcp_skill_catalogs")
+	}
 	root, ok := mapping(doc.Content[0], keys...)
 	if !ok {
 		keys = append(keys, "mcp_enabled", "mcp_skills_root", "mcp_username")
@@ -161,6 +166,15 @@ func Load(filename string) (Settings, error) {
 			result.MCPFileWrites = true
 		}
 	}
+	if catalogsPresent {
+		if !result.MCPEnabled {
+			return Settings{}, errSettings
+		}
+		result.MCPSkillCatalogs, ok = parseSkillCatalogs(root["mcp_skill_catalogs"])
+		if !ok {
+			return Settings{}, errSettings
+		}
+	}
 	paths := []string{absolute}
 	for _, node := range []*yaml.Node{root["database_path"], tls["cert_file"], tls["key_file"]} {
 		if !safePath(node.Value) {
@@ -217,6 +231,10 @@ func plainNodes(node *yaml.Node) bool {
 	case yaml.DocumentNode:
 	case yaml.MappingNode:
 		if node.Tag != "!!map" {
+			return false
+		}
+	case yaml.SequenceNode:
+		if node.Tag != "!!seq" {
 			return false
 		}
 	case yaml.ScalarNode:

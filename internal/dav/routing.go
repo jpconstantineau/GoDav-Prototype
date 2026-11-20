@@ -113,11 +113,11 @@ func routeStatusTransport(r *http.Request, expected authority, scheme string, al
 	if !ok || path != r.URL.Path {
 		return 400
 	}
-	isMCP := scheme == "https" && len(allowMCP) == 1 && allowMCP[0] && path == "/mcp"
+	isMCP := scheme == "https" && len(allowMCP) == 1 && allowMCP[0]
 	if !isMCP && path != "/dav" && !strings.HasPrefix(path, "/dav/") {
 		return 404
 	}
-	if isMCP && (r.RequestURI != "/mcp" || r.URL.RawPath != "" || strings.EqualFold(r.Header.Get("Sec-Fetch-Site"), "cross-site") || len(r.Header.Values("Destination")) != 0) {
+	if isMCP && (r.RequestURI != path || r.URL.RawPath != "" || strings.EqualFold(r.Header.Get("Sec-Fetch-Site"), "cross-site") || len(r.Header.Values("Destination")) != 0) {
 		return 400
 	}
 	if origins := r.Header.Values("Origin"); len(origins) > 0 {
