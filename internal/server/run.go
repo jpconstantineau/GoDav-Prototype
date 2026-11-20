@@ -21,6 +21,7 @@ import (
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localfs"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localstate"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/mcpskills"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/sqlite"
 )
@@ -125,7 +126,18 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 		if err != nil {
 			return errors.New("MCP configuration invalid")
 		}
-		handler = dav.HandlerWithMCP(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes, settings.MCPUsername, mcp)
+		endpoints := map[string]dav.MCPEndpoint{"/mcp": {Handler: mcp, Users: []string{settings.MCPUsername}}}
+		for _, spec := range settings.MCPSkillCatalogs {
+			if spec.Name == "" {
+				continue
+			}
+			catalog, err := mcpskills.NewNamedCatalog(mcp, spec.Name, spec.Skills())
+			if err != nil {
+				return errors.New("MCP skill catalog configuration invalid")
+			}
+			endpoints["/mcp/catalogs/"+spec.Name] = dav.MCPEndpoint{Handler: catalog, Users: spec.Users()}
+		}
+		handler = dav.HandlerWithMCPEndpoints(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes, endpoints)
 	default:
 		handler = dav.Handler(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes)
 	}

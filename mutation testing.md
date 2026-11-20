@@ -179,3 +179,34 @@ The clean Windows integration also verified pre-existing content, full-text
 versus path matching, metadata filters, result limits, WebDAV replacement,
 delete and MOVE (including collections moved into and out of the search
 root), MCP create/edit, and reopen. No survivors in this sample.
+
+## Scoped coding and research Skill catalogs
+
+Host: Zen-1000, Windows amd64, Go 1.27.4 with `CGO_ENABLED=0`. Base PR #20 at
+`e6cf433f3b8aa7a861ccedef45843d6a5b50f927`. The integration test starts the actual
+GoDav executable on disposable authenticated HTTPS/WebDAV state. It seeds
+synthetic shared, coding-only and research-only packages centrally, then checks
+native and legacy fallback catalogs, supporting bytes, cross-scope URI
+rejection, and the unchanged default. A controlled client cache uses a positive
+one-minute TTL: repeated identical reads hit, while switching endpoint or
+identity misses. Live GoDav continues to return zero TTL/private/no-store and
+perform authentication independently of the test cache. This is a wire test,
+not a claim about an interactive Copilot cache implementation.
+
+Clean run (all selected tests):
+`go test ./internal/config ./internal/mcpskills ./internal/cli -run '^(TestSkillCatalogSettings|TestNamedCatalogSharesDispatchAdmission|TestMCPScopedSkillCatalogs)$' -count=1 -timeout=120s`.
+
+Each temporary mutation was run one at a time in a detached scratch checkout
+using the respective package and named test (or `top-level/subtest`) as the
+`-run` filter; each was restored byte-for-byte afterward.
+
+| Selected test | Temporary production mutation | Result |
+| --- | --- | --- |
+| `TestSkillCatalogSettings` | `internal/config/skill_catalogs.go`: `catalogValues(spec["skills"], 32,` to `catalogValues(spec["skills"], 33,` | Killed, exit 1: accepted invalid setting, bounded membership. |
+| `TestMCPScopedSkillCatalogs/CatalogViews` | `internal/mcpskills/catalog.go`: `!h.selectedSkills[dir.Name]` to `(!h.selectedSkills[dir.Name] || dir.Name != "shared")` | Killed, exit 1: coding view lost its unique package. |
+| `TestMCPScopedSkillCatalogs/WarmCachePartition` | `internal/mcpskills/handler.go`: `result["ttlMs"] = 0` to `result["ttlMs"] = 1` | Killed, exit 1: live catalog no longer reported zero TTL. |
+| `TestNamedCatalogSharesDispatchAdmission` | `internal/mcpskills/handler.go`: `slots: base.slots` to `slots: make(chan struct{}, 1)` in the named handler | Killed, exit 1: a busy shared dispatch returned 200 instead of 503. |
+
+Restored run passed (config 0.072s, MCP Skills 0.032s, CLI 4.979s); 4 killed,
+0 survivors, and 0 invalid/equivalent among the selected mutants. No mutated
+source is committed.

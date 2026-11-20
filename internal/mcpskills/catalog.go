@@ -193,7 +193,7 @@ func (h *handler) catalog(ctx context.Context) (_ *catalog, resultErr error) {
 	remember(h.scope, top)
 	sort.Slice(top.Children, func(i, j int) bool { return top.Children[i].Name < top.Children[j].Name })
 	for _, dir := range top.Children {
-		if dir.File {
+		if dir.File || (h.selectedSkills != nil && !h.selectedSkills[dir.Name]) {
 			continue
 		}
 		if !skillName.MatchString(dir.Name) || len(dir.Name) > 64 {

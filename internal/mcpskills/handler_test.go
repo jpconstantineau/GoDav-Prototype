@@ -390,3 +390,40 @@ func TestSkillEntryMIMEAcrossReadSurfaces(t *testing.T) {
 		})
 	}
 }
+
+func TestNamedCatalogSharesDispatchAdmission(t *testing.T) {
+	base, _ := fixture(t)
+	coding, err := NewNamedCatalog(base, "coding", []string{"demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	research, err := NewNamedCatalog(base, "research", []string{"demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Occupy one runner's actual dispatch slot without relying on timing or
+	// touching the repository. All handlers must deny admission until release.
+	slot := research.(*handler).slots
+	slot <- struct{}{}
+	request := func(h http.Handler) int {
+		r := httptest.NewRequest("POST", "https://localhost/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Accept", "application/json, text/event-stream")
+		r.Header.Set("MCP-Protocol-Version", LegacyVersion)
+		r = r.WithContext(auth.WithPrincipal(r.Context(), "alice"))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+	for _, h := range []http.Handler{base, coding, research} {
+		if got := request(h); got != http.StatusServiceUnavailable {
+			t.Fatalf("busy shared dispatch returned %d, want 503", got)
+		}
+	}
+	<-slot
+	for _, h := range []http.Handler{base, coding, research} {
+		if got := request(h); got != http.StatusOK {
+			t.Fatalf("released shared dispatch returned %d, want 200", got)
+		}
+	}
+}

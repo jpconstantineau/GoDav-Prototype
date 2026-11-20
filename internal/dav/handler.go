@@ -26,6 +26,21 @@ func Handler(accounts AccountLookup, collections *files.Service, origin string, 
 // HandlerWithMCP shares authority checks and the expensive-authentication budget.
 // A nil MCP handler leaves the existing DAV transport and namespace unchanged.
 func HandlerWithMCP(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64, mcpUsername string, mcp http.Handler) http.Handler {
+	var endpoints map[string]MCPEndpoint
+	if mcp != nil {
+		endpoints = map[string]MCPEndpoint{"/mcp": {Handler: mcp, Users: []string{mcpUsername}}}
+	}
+	return HandlerWithMCPEndpoints(accounts, collections, origin, maxBytes, endpoints)
+}
+
+// MCPEndpoint binds one exact HTTPS path and an operator-configured allowlist to
+// a handler. Entries are constructed once at server startup.
+type MCPEndpoint struct {
+	Handler http.Handler
+	Users   []string
+}
+
+func HandlerWithMCPEndpoints(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64, endpoints map[string]MCPEndpoint) http.Handler {
 	u, _ := url.Parse(origin)
 	expected, _ := parseAuthority(u.Host)
 	slots := make(chan struct{}, 2)
@@ -39,7 +54,8 @@ func HandlerWithMCP(accounts AccountLookup, collections *files.Service, origin s
 			w.Header().Set("WWW-Authenticate", `Basic realm="GoDav"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		}
-		if code := routeStatusTransport(r, expected, "https", mcp != nil); code != 0 {
+		endpoint := endpoints[r.URL.Path]
+		if code := routeStatusTransport(r, expected, "https", endpoint.Handler != nil); code != 0 {
 			http.Error(w, http.StatusText(code), code)
 			return
 		}
@@ -88,12 +104,14 @@ func HandlerWithMCP(accounts AccountLookup, collections *files.Service, origin s
 			return
 		}
 		r = r.WithContext(auth.WithPrincipal(r.Context(), principal))
-		if mcp != nil && r.URL.Path == "/mcp" {
-			if !strings.EqualFold(username, mcpUsername) {
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
-				return
+		if endpoint.Handler != nil {
+			for _, permitted := range endpoint.Users {
+				if strings.EqualFold(username, permitted) {
+					endpoint.Handler.ServeHTTP(w, r)
+					return
+				}
 			}
-			mcp.ServeHTTP(w, r)
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
 		}
 		mux.ServeHTTP(w, r)
