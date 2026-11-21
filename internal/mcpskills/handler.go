@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/requestlog"
 )
 
 const ProtocolVersion = "2026-07-28"
@@ -31,10 +33,10 @@ type Tool struct {
 	Call        func(context.Context, json.RawMessage) (any, error) `json:"-"`
 }
 type handler struct {
-	files *files.Service
-	scope string
-	extra []Tool
-	slots chan struct{}
+	files     *files.Service
+	scope     string
+	extra     []Tool
+	admission *dataAdmission
 }
 
 // New requires an authenticated principal in each request's context. Its host
@@ -57,7 +59,7 @@ func NewWithTools(service *files.Service, scope string, extra []Tool) (http.Hand
 		}
 		seen[t.Name] = true
 	}
-	return &handler{service, scope, append([]Tool(nil), extra...), make(chan struct{}, 1)}, nil
+	return &handler{service, scope, append([]Tool(nil), extra...), &dataAdmission{}}, nil
 }
 
 type request struct {
@@ -149,13 +151,6 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if !accept(r, "application/json") || !accept(r, "text/event-stream") {
 		http.Error(w, "Not Acceptable", 406)
-		return
-	}
-	select {
-	case h.slots <- struct{}{}:
-		defer func() { <-h.slots }()
-	default:
-		http.Error(w, "Service Unavailable", 503)
 		return
 	}
 	limit := int64(MaxRequestBytes)
@@ -256,7 +251,32 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unsupported notification", 400)
 		return
 	}
-	result, err := h.dispatch(r.Context(), req.Method, p, modern)
+	ctx := r.Context()
+	class := dataOperation(req.Method, p.Name, modern)
+	if class != "" {
+		start := time.Now()
+		outcome, queued := h.admission.acquire(ctx)
+		wait := time.Since(start)
+		active, waiting := h.admission.occupancy()
+		requestlog.MCPAdmission(ctx, class, string(outcome), wait, queued, active, waiting)
+		if outcome != admitted {
+			rejectAdmission(w, outcome)
+			return
+		}
+		// Keep the permit through serialization, preserving the previous
+		// bound on concurrently materialized data responses.
+		defer h.admission.release()
+	}
+	if contextEnded(ctx) {
+		rejectAdmission(w, queueCancelled)
+		return
+	}
+	if class == "" {
+		class = "control"
+	}
+	executionStart := time.Now()
+	result, err := h.dispatch(ctx, req.Method, p, modern)
+	requestlog.MCPExecution(ctx, class, time.Since(executionStart), err != nil || result["isError"] == true)
 	if err != nil {
 		code, status := -32602, 200
 		if errors.Is(err, errMethod) {
@@ -278,6 +298,48 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result["cacheScope"] = "private"
 	}
 	writeJSON(w, 200, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+}
+
+// StopAdmission wakes pending data requests at graceful shutdown. A request
+// already admitted may finish under the existing request grace/deadline.
+func StopAdmission(h http.Handler) {
+	if h, ok := h.(*handler); ok {
+		h.admission.stop()
+	}
+}
+
+func rejectAdmission(w http.ResponseWriter, outcome admissionResult) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("GoDav-Rejection", "mcp-"+string(outcome))
+	if outcome != queueCancelled {
+		w.Header().Set("Retry-After", "1")
+	}
+	http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+}
+
+// Only already validated calls that might consult the data layer enter the
+// queue. Classes are fixed vocabulary, not client method names or parameters.
+func dataOperation(method, tool string, modern bool) string {
+	switch method {
+	case "skills/list", "skills/get":
+		if modern {
+			return "skills"
+		}
+	case "resources/list", "resources/read":
+		return "skills"
+	case "tools/call":
+		switch tool {
+		case "create_file", "edit_file", "delete_file":
+			return "file-write"
+		case "list_files", "read_file", "search_files", "search_file_contents":
+			return "file-read"
+		case "list_skills", "get_skill":
+			return "skills"
+		default:
+			return "other-tool"
+		}
+	}
+	return ""
 }
 
 var errMethod = errors.New("Method not found")

@@ -12,12 +12,13 @@ import (
 type key struct{}
 type observation struct {
 	logger    *slog.Logger
+	id        uint64
 	cancelled atomic.Bool
 }
 
 // Begin is called once around application handling, including early rejection.
-func Begin(ctx context.Context, logger *slog.Logger) context.Context {
-	return context.WithValue(ctx, key{}, &observation{logger: logger})
+func Begin(ctx context.Context, logger *slog.Logger, id uint64) context.Context {
+	return context.WithValue(ctx, key{}, &observation{logger: logger, id: id})
 }
 
 // Complete must run before the caller's normal deferred cancel. It records only
@@ -47,5 +48,21 @@ func StoreWait(ctx context.Context, elapsed time.Duration, err error) {
 			result = "cancelled"
 		}
 	}
-	state.logger.Info("store-gate", "result", result, "wait", elapsed)
+	state.logger.Info("store-gate", "result", result, "wait", elapsed, "request_id", state.id)
+}
+
+func MCPAdmission(ctx context.Context, class, result string, wait time.Duration, queued bool, active, waiting int) {
+	if state, ok := ctx.Value(key{}).(*observation); ok {
+		state.logger.Info("mcp-admission", "class", class, "result", result, "wait", wait, "queued", queued, "active", active, "waiting", waiting, "request_id", state.id)
+	}
+}
+
+func MCPExecution(ctx context.Context, class string, elapsed time.Duration, failed bool) {
+	if state, ok := ctx.Value(key{}).(*observation); ok {
+		result := "complete"
+		if failed {
+			result = "error"
+		}
+		state.logger.Info("mcp-execution", "class", class, "result", result, "duration", elapsed, "request_id", state.id)
+	}
 }

@@ -20,6 +20,32 @@ With an extension-aware wire client, use [MCP Skills](https://skills.extensions.
 
 Omit all three keys to disable MCP. The separate anonymous `godav run http-test` mode still serves disposable WebDAV only; it never enables MCP. There is no trust-store, Explorer, Windows service, or GoBrain change in this slice.
 
+## Short request bursts
+
+Authenticated MCP data calls (Skills and resource reads, and file tools) share
+one dispatch slot. A second data call can wait for up to 200 ms inside the
+existing request deadline. A third data call does not wait. Shutdown wakes a
+pending call without dispatching it; the running call retains the existing
+shutdown grace. Canceled, expired, and rejected requests are never replayed.
+Discovery, tool-descriptor listing and ping bypass the data queue after the
+ordinary authentication and protocol checks. Authentication can still wait on
+the same SQLite operation gate as WebDAV and MCP data; this is not parallel
+database access or a higher outer request or connection limit.
+
+A queue rejection returns HTTP 503. `GoDav-Rejection` distinguishes `mcp-full`,
+`mcp-timeout`, `mcp-stopping`, or `mcp-cancelled`. Retryable queue rejections
+include integer `Retry-After: 1`. Existing request and authentication markers
+remain separate; `authentication-lookup` identifies an unsuccessful account
+lookup operation, not invalid credentials. Application logs correlate the
+response's rejection marker, coarse MCP class, queue wait/occupancy, dispatch
+duration, and existing SQLite gate waits by request ID. Count rejection lines
+by stage; names, credentials, content and request bodies are not logged.
+
+For a retryable read, respect the retry hint and try again after a short delay.
+Never blindly replay a write after an uncertain failure: reread the file or
+list its parent to reconcile what committed, then use its current ETag if
+another edit or delete is needed. No queue result weakens write opt-in,
+WebDAV locks, or ETag checks at publication.
 ## Verify
 
 On Windows, run the Go tests against disposable fixtures. They exercise WebDAV ingest and compare native and fallback reads, then change a supporting file via WebDAV and verify manifest refresh without implying that a host hot-reloads its conversation. The authenticated HTTPS smoke test does not establish native support in ChatGPT or Codex.

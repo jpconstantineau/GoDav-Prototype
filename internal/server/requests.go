@@ -22,6 +22,7 @@ type requestUsers struct {
 	active, receiving int
 	owners            sync.WaitGroup
 	logger            *slog.Logger
+	stopMCP           func()
 }
 
 func (g *requestUsers) guard(next http.Handler) http.Handler {
@@ -79,5 +80,14 @@ func (b *receivingBody) Read(p []byte) (int, error) {
 	}
 	return n, err
 }
-func (g *requestUsers) stop() { g.mu.Lock(); g.stopping = true; g.mu.Unlock() }
+func (g *requestUsers) stop() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.stopping {
+		g.stopping = true
+		if g.stopMCP != nil {
+			g.stopMCP()
+		}
+	}
+}
 func (g *requestUsers) wait() { g.owners.Wait() }

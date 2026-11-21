@@ -80,6 +80,7 @@ func HandlerWithMCP(accounts AccountLookup, collections *files.Service, origin s
 			return found, matches, r.Context().Err()
 		}()
 		if err != nil {
+			w.Header().Set("GoDav-Rejection", "authentication-lookup")
 			http.Error(w, "Service Unavailable", 503)
 			return
 		}
@@ -147,12 +148,17 @@ func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 func Trace(logger *slog.Logger, next http.Handler) http.Handler {
 	var ids atomic.Uint64
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r = r.WithContext(requestlog.Begin(r.Context(), logger))
-		start := time.Now()
 		id := ids.Add(1)
+		r = r.WithContext(requestlog.Begin(r.Context(), logger, id))
+		start := time.Now()
 		record := &statusWriter{ResponseWriter: w}
 		defer func() {
 			fields := []any{"method", safeMethod(r.Method), "path", safePath(r), "status", record.code(), "outcome", record.outcome(r.Context()), "duration", time.Since(start), "request_id", id}
+			switch rejection := record.Header().Get("GoDav-Rejection"); rejection {
+			case "requests", "receiving", "stopping", "authentication", "authentication-lookup",
+				"mcp-full", "mcp-timeout", "mcp-stopping", "mcp-cancelled":
+				fields = append(fields, "rejection", rejection)
+			}
 			if r.Method == "MOVE" {
 				fields = append(fields, "destination", safeMoveDestination(r))
 			}

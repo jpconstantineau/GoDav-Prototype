@@ -179,3 +179,38 @@ The clean Windows integration also verified pre-existing content, full-text
 versus path matching, metadata filters, result limits, WebDAV replacement,
 delete and MOVE (including collections moved into and out of the search
 root), MCP create/edit, and reopen. No survivors in this sample.
+
+## Bounded MCP admission queue follow-up
+
+Host: Zen-1000, Windows amd64, Go 1.27.4, `CGO_ENABLED=0`. Base: main at
+`f2e732713eab3fe2c5af2647158f2a5076be506b`. Tests use Go's synchronized
+`testing/synctest` bubble with a virtual clock and barriers, not timing sleeps
+to create pressure. One active read is held inside a synthetic dispatch; queued
+writes have an observable callback that must never run after timeout,
+cancellation or shutdown. Previous real HTTPS Skills, WebDAV, file tools and
+FTS integrations use fresh disposable data and are rerun separately.
+
+Clean commands:
+
+```text
+go test ./internal/mcpskills -run '^TestMCPAdmission' -count=1 -timeout=30s -v
+go test ./internal/mcpskills -run '^TestMCPAdmission' -count=10 -timeout=60s
+go test ./internal/cli -run '^(TestMCPContentSearchAcrossWebDAV|TestMCPFileToolsAcrossWebDAV|TestMCPSkillsPinnedPrototypeEndToEnd|TestMCPSkillsAnonymousHTTPRemainsWebDAVOnly)$' -count=1 -timeout=120s -v
+```
+
+One edit at a time in a detached scratch checkout, each run with
+`go test ./internal/mcpskills -run '^<test name>$' -count=1 -timeout=30s`,
+then restored byte-for-byte in a finally block:
+
+| Test | Temporary production edit | Observed failure |
+| --- | --- | --- |
+| `TestMCPAdmissionWaitFullAndRecovery` | `admission.go`: `case q.waiter != nil:` to `case q.active \|\| q.waiter != nil:` | Earlier overlapping call did not wait. |
+| `TestMCPAdmissionControlsBypassQueuedData` | `handler.go`: add `"tools/list"` to `case "resources/list", "resources/read":` in data classification | `tools/list` returned 503 instead of 200 with the data queue full. |
+| `TestMCPAdmissionTimeoutNeverDispatchesWrite` | `admission.go`: `case !time.Now().Before(deadline):` to `case false:` after wake | The expired write returned 200 instead of 503 with timeout and integer retry hint. |
+| `TestMCPAdmissionCancellationWinsRelease` | `admission.go`: change `case contextEnded(ctx):` to `case false:` in the queued promotion switch only | Simultaneous release and cancellation granted the pending request. |
+| `TestMCPAdmissionShutdownWakesQueuedWrite` | `admission.go`: remove `q.notify()` immediately after `q.stopping = true` | Shutdown did not wake the pending request immediately. |
+
+All five mutants failed their intended assertion (exit 1). Zero survivors and
+zero invalid/equivalent. The restored five-test run passed ten repetitions
+(0.057s), and the four Windows integration tests passed (19.714s). No mutants
+were committed.
