@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/config"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/requestlog"
 )
@@ -26,24 +27,60 @@ func Handler(accounts AccountLookup, collections *files.Service, origin string, 
 // HandlerWithMCP shares authority checks and the expensive-authentication budget.
 // A nil MCP handler leaves the existing DAV transport and namespace unchanged.
 func HandlerWithMCP(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64, mcpUsername string, mcp http.Handler) http.Handler {
-	var endpoints map[string]MCPEndpoint
-	if mcp != nil {
-		endpoints = map[string]MCPEndpoint{"/mcp": {Handler: mcp, Users: []string{mcpUsername}}}
-	}
-	return HandlerWithMCPEndpoints(accounts, collections, origin, maxBytes, endpoints)
+	return HandlerWithAdmission(accounts, collections, origin, maxBytes, mcpUsername, mcp, nil)
 }
 
-// MCPEndpoint binds one exact HTTPS path and an operator-configured allowlist to
-// a handler. Entries are constructed once at server startup.
+// AuthenticatedAdmission takes a request slot for a verified account ID. The
+// caller releases the slot after dispatch and synchronous response writes.
+type AuthenticatedAdmission func(principal string) (release func(), ok bool)
+
+// HandlerWithAdmission preserves the singleton test/API shape.
+func HandlerWithAdmission(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64, mcpUsername string, mcp http.Handler, admit AuthenticatedAdmission) http.Handler {
+	return HandlerWithRequestPolicy(accounts, collections, origin, maxBytes, mcp, RequestPolicy{
+		MCPUsers: []string{mcpUsername}, Admit: admit, AuthSlots: config.DefaultConcurrency().AuthSlots,
+	})
+}
+
+type RequestPolicy struct {
+	MCPUsers  []string
+	Admit     AuthenticatedAdmission
+	AuthSlots int
+}
+
+// HandlerWithRequestPolicy applies one shared authentication semaphore and one
+// authenticated request quota to the DAV and optional MCP routes.
+func HandlerWithRequestPolicy(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64, mcp http.Handler, policy RequestPolicy) http.Handler {
+	var endpoints map[string]MCPEndpoint
+	if mcp != nil {
+		endpoints = map[string]MCPEndpoint{"/mcp": {Handler: mcp, Users: policy.MCPUsers}}
+	}
+	return HandlerWithMCPEndpoints(accounts, collections, origin, maxBytes, endpoints, policy)
+}
+
+// MCPEndpoint binds a single exact HTTPS path to its operator-controlled allowlist.
 type MCPEndpoint struct {
 	Handler http.Handler
 	Users   []string
 }
 
-func HandlerWithMCPEndpoints(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64, endpoints map[string]MCPEndpoint) http.Handler {
+// HandlerWithMCPEndpoints shares authentication and the verified account quota
+// across DAV and all MCP endpoints, without combining their access grants.
+func HandlerWithMCPEndpoints(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64, endpoints map[string]MCPEndpoint, policy RequestPolicy) http.Handler {
 	u, _ := url.Parse(origin)
 	expected, _ := parseAuthority(u.Host)
-	slots := make(chan struct{}, 2)
+	slots := make(chan struct{}, policy.AuthSlots)
+	type route struct {
+		handler http.Handler
+		users   map[string]bool
+	}
+	routes := make(map[string]route, len(endpoints))
+	for path, endpoint := range endpoints {
+		users := make(map[string]bool, len(endpoint.Users))
+		for _, user := range endpoint.Users {
+			users[strings.ToLower(user)] = true
+		}
+		routes[path] = route{endpoint.Handler, users}
+	}
 	mux := http.NewServeMux()
 	root := discovery(collections, maxBytes)
 	mux.Handle("/dav", root)
@@ -54,8 +91,8 @@ func HandlerWithMCPEndpoints(accounts AccountLookup, collections *files.Service,
 			w.Header().Set("WWW-Authenticate", `Basic realm="GoDav"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		}
-		endpoint := endpoints[r.URL.Path]
-		if code := routeStatusTransport(r, expected, "https", endpoint.Handler != nil); code != 0 {
+		endpoint := routes[r.URL.Path]
+		if code := routeStatusTransport(r, expected, "https", endpoint.handler != nil); code != 0 {
 			http.Error(w, http.StatusText(code), code)
 			return
 		}
@@ -79,7 +116,7 @@ func HandlerWithMCPEndpoints(accounts AccountLookup, collections *files.Service,
 		}
 		// Expensive verification is bounded separately from admitted DAV work.
 		// No receiving upload or slow response retains an authentication permit.
-		principal := ""
+		principal, verifiedKey := "", ""
 		found, matches, err := func() (bool, bool, error) {
 			defer func() { <-slots }()
 			account, found, err := accounts.LookupEnabled(r.Context(), username)
@@ -91,11 +128,12 @@ func HandlerWithMCPEndpoints(accounts AccountLookup, collections *files.Service,
 			}
 			matches := account.VerifyPassword(password)
 			if found && matches {
-				principal = account.ID
+				principal, verifiedKey = account.ID, account.Key
 			}
 			return found, matches, r.Context().Err()
 		}()
 		if err != nil {
+			requestlog.AuthLookupFailure(r.Context())
 			http.Error(w, "Service Unavailable", 503)
 			return
 		}
@@ -103,15 +141,23 @@ func HandlerWithMCPEndpoints(accounts AccountLookup, collections *files.Service,
 			reject()
 			return
 		}
-		r = r.WithContext(auth.WithPrincipal(r.Context(), principal))
-		if endpoint.Handler != nil {
-			for _, permitted := range endpoint.Users {
-				if strings.EqualFold(username, permitted) {
-					endpoint.Handler.ServeHTTP(w, r)
-					return
-				}
-			}
+		isMCP := endpoint.handler != nil
+		if isMCP && !endpoint.users[verifiedKey] {
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return
+		}
+		if policy.Admit != nil {
+			release, accepted := policy.Admit(principal)
+			if !accepted {
+				w.Header().Set("GoDav-Rejection", "account-requests")
+				http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+				return
+			}
+			defer release()
+		}
+		r = r.WithContext(auth.WithPrincipal(r.Context(), principal))
+		if isMCP {
+			endpoint.handler.ServeHTTP(w, r)
 			return
 		}
 		mux.ServeHTTP(w, r)
@@ -165,12 +211,17 @@ func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 func Trace(logger *slog.Logger, next http.Handler) http.Handler {
 	var ids atomic.Uint64
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r = r.WithContext(requestlog.Begin(r.Context(), logger))
-		start := time.Now()
 		id := ids.Add(1)
+		r = r.WithContext(requestlog.Begin(r.Context(), logger, id))
+		start := time.Now()
 		record := &statusWriter{ResponseWriter: w}
 		defer func() {
 			fields := []any{"method", safeMethod(r.Method), "path", safePath(r), "status", record.code(), "outcome", record.outcome(r.Context()), "duration", time.Since(start), "request_id", id}
+			switch rejection := record.Header().Get("GoDav-Rejection"); rejection {
+			case "requests", "receiving", "stopping", "authentication", "account-requests",
+				"mcp-full", "mcp-timeout", "mcp-stopping", "mcp-cancelled":
+				fields = append(fields, "rejection", rejection)
+			}
 			if r.Method == "MOVE" {
 				fields = append(fields, "destination", safeMoveDestination(r))
 			}

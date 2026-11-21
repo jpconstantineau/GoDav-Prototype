@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSkillCatalogSettings(t *testing.T) {
@@ -26,6 +27,13 @@ func TestSkillCatalogSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	coding, research := cfg.MCPSkillCatalogs[0], cfg.MCPSkillCatalogs[1]
+	combined := strings.Replace(enabled, "mcp_username: FixtureUser", "mcp_usernames: [FixtureUser, DefaultUser]", 1)
+	multi, err := load(base + combined + catalogs + "concurrency: {mcp_waiting: 3, mcp_wait_ms: 250}\n")
+	if err != nil || !reflect.DeepEqual(multi.MCPAllowedUsernames(), []string{"defaultuser", "fixtureuser"}) ||
+		multi.MCPSkillCatalogs != cfg.MCPSkillCatalogs || multi.Concurrency.MCPWaiting != 3 ||
+		multi.Concurrency.MCPWait != 250*time.Millisecond {
+		t.Fatalf("default allowlist, catalog grants and scheduler tuning did not compose: %v", err)
+	}
 	if coding.Name != "coding" || research.Name != "research" ||
 		!reflect.DeepEqual(coding.Users(), []string{"FixtureUser"}) || !reflect.DeepEqual(coding.Skills(), []string{"shared", "code"}) ||
 		!reflect.DeepEqual(research.Users(), []string{"FixtureUser", "ResearchUser"}) || !reflect.DeepEqual(research.Skills(), []string{"shared", "research"}) {

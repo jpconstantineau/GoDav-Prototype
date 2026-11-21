@@ -180,6 +180,141 @@ versus path matching, metadata filters, result limits, WebDAV replacement,
 delete and MOVE (including collections moved into and out of the search
 root), MCP create/edit, and reopen. No survivors in this sample.
 
+## Bounded MCP admission queue follow-up
+
+Host: Zen-1000, Windows amd64, Go 1.27.4, `CGO_ENABLED=0`. Base: main at
+`f2e732713eab3fe2c5af2647158f2a5076be506b`. Tests use Go's synchronized
+`testing/synctest` bubble with a virtual clock and barriers, not timing sleeps
+to create pressure. One active read is held inside a synthetic dispatch; queued
+writes have an observable callback that must never run after timeout or
+shutdown; a separate cancellation assertion checks the promotion decision.
+Previous real HTTPS Skills, WebDAV, file tools and
+FTS integrations use fresh disposable data and are rerun separately.
+
+Clean commands:
+
+```text
+go test ./internal/mcpskills -run '^TestMCPAdmission' -count=1 -timeout=30s -v
+go test ./internal/mcpskills -run '^TestMCPAdmission' -count=10 -timeout=60s
+go test ./internal/cli -run '^(TestMCPContentSearchAcrossWebDAV|TestMCPFileToolsAcrossWebDAV|TestMCPSkillsPinnedPrototypeEndToEnd|TestMCPSkillsAnonymousHTTPRemainsWebDAVOnly)$' -count=1 -timeout=120s -v
+```
+
+One edit at a time in a detached scratch checkout, each run with
+`go test ./internal/mcpskills -run '^<test name>$' -count=1 -timeout=30s`,
+then restored byte-for-byte in a finally block:
+
+| Test | Temporary production edit | Observed failure |
+| --- | --- | --- |
+| `TestMCPAdmissionWaitFullAndRecovery` | `admission.go`: `case q.waiter != nil:` to `case q.active \|\| q.waiter != nil:` | Earlier overlapping call did not wait. |
+| `TestMCPAdmissionControlsBypassQueuedData` | `handler.go`: add `"tools/list"` to `case "resources/list", "resources/read":` in data classification | `tools/list` returned 503 instead of 200 with the data queue full. |
+| `TestMCPAdmissionTimeoutNeverDispatchesWrite` | `admission.go`: `case !time.Now().Before(deadline):` to `case false:` after wake | The expired write returned 200 instead of 503 with timeout and integer retry hint. |
+| `TestMCPAdmissionCancellationWinsRelease` | `admission.go`: change `case contextEnded(ctx):` to `case false:` in the queued promotion switch only | Simultaneous release and cancellation granted the pending request. |
+| `TestMCPAdmissionShutdownWakesQueuedWrite` | `admission.go`: remove `q.notify()` immediately after `q.stopping = true` | Shutdown did not wake the pending request immediately. |
+| `TestMCPAdmissionControlsBypassQueuedData` | `handler.go`: return `"other-tool"` when a `tools/call` name is not registered, instead of falling through to `""` | The unavailable tool returned 503 in place of its ordinary JSON-RPC rejection. |
+| `TestRequestUsersStopClosesMCPAdmission` | `server/requests.go`: change `mcpskills.StopAdmission(g.mcp)` to `mcpskills.StopAdmission(nil)` | Outer shutdown still closed, but the MCP gate returned 200 and dispatched an additional call. |
+
+Seven temporary mutations failed their intended assertions (exit 1). Zero
+survivors and zero invalid/equivalent. The restored admission and server tests
+passed ten repetitions, including the deterministic shutdown wiring test, with:
+`go test ./internal/mcpskills ./internal/server -run '^(TestMCPAdmission|TestRequestUsersStopClosesMCPAdmission)' -count=10 -timeout=60s`.
+The four Windows integration tests passed (19.714s). No mutants were committed.
+
+### Legacy authentication lookup retry boundary
+
+The full Windows suite caught an attempted response-header change:
+`TestBoundsAuthenticationWaitDoesNotQueue` rejected marking two delayed SQLite
+authentication waits as retryable. The fix leaves these responses unmarked,
+retains the old immediate `authentication` admission marker, and logs the
+lookup failure with the correlated request ID.
+
+`go test ./internal/cli -run '^TestBoundsAuthenticationWaitDoesNotQueue$' -count=1 -timeout=120s`
+passed clean (9.427s). Two further isolated mutants at the auth error path of
+`internal/dav/handler.go` were caught:
+
+- Replace `requestlog.AuthLookupFailure(r.Context())` with a comment: exit 1,
+  missing both log-only authentication failure records.
+- Keep that log call but add
+  `w.Header().Set("GoDav-Rejection", "authentication-lookup")` afterward:
+  exit 1, operation timeout incorrectly authorizes retry.
+
+The restored detached run passed (8.534s). Total for the queue follow-up:
+nine killed, zero survivors or invalid/equivalent among the selected mutants.
+
+## Configurable request, account, authentication and MCP admission
+
+Base: published PR #29 at `7e51f025cf64f2422f2bc661f142fd98b13e194f`.
+Zen-1000, Windows amd64, Go 1.27.4, `CGO_ENABLED=0`.
+The request tests exercise synchronized real handlers at 100/101 requests,
+stable verified ID 10/11 across DAV/MCP, actual HTTPS account 10/11 and a
+configured socket limit. The authentication test holds ten synthetic lookups,
+checks the eleventh fails fast, and leaves owned failures unmarked. The live
+SQLite fixture checks the same distinction. Ten explicitly allowlisted
+credentials each read the same synthetic file through the real HTTPS endpoint;
+a valid unlisted account gets 403. The dispatcher tests use a virtual clock
+and a synthetic backend for two active data slots, without widening SQLite.
+
+The nine focused Windows integration tests, config/DAV/server/MCP Skills
+package tests, vet and module verification passed. Runtime mutants were
+applied one at a time in a detached scratch worktree and restored byte-for-byte.
+Each ran `go test <affected package(s)> -run '^<named test(s)>$' -count=1 -timeout=120s`.
+
+| Test(s) | Temporary mutation | Observed assertion |
+| --- | --- | --- |
+| GlobalRequestQuotaAndRecovery | `requests.go`: `g.active >= g.limits.MaxRequests` to `>` | 101st returned 204, not global 503. |
+| SharedAuthenticatedAccountQuota and BoundsAuthenticatedAccountEleventhRequest | `requests.go`: `count >= g.limits.MaxRequestsPerAccount` to `>` | Both mixed and wire eleventh calls returned 200 instead of 429. |
+| SharedAuthenticatedAccountQuota | `dav/handler.go`: `policy.Admit(principal)` to `policy.Admit(username)` | Case variant escaped the shared bucket. |
+| SharedAuthenticatedAccountQuota | `requests.go`: replace `delete(g.byAccount, principal)` with `g.byAccount[principal] = 0` | Completed account counters were not reclaimed. |
+| BoundsUploadsAndMetadataReleaseAuthenticationPermit | `requests.go`: replace `g.active >= g.limits.MaxRequests` with `g.active >= 4` | Fifth request was refused despite available quota. |
+| AuthAdmissionTenSharedFailFast and BoundsAuthenticationWaitDoesNotQueue | `dav/handler.go`: add one to the channel capacity `policy.AuthSlots` | The eleventh lookup entered; live contention observed zero fail-fast and eleven bounded waits. |
+| BoundsAcceptedConnectionsAndReuse | `run.go`: add one to `limits.MaxConnections` when allocating the connection permit channel | Connection above the configured capacity remained open. |
+| MCPExplicitTenAccountAllowlist | `dav/handler.go`: populate allowlist from `policy.MCPUsers[:min(len(policy.MCPUsers),1)]` instead of all entries | A listed account got 403. |
+| MCPDataConcurrencyRequiresBackendCapability | `data_concurrency.go`: replace backend ceiling check with `requested > 16` | SQLite incorrectly accepted width two. |
+| MCPAdmissionMultipleActiveAndFIFO | `admission.go`: immediate slot check `q.active < q.capacity` to `q.active < 1` | Synthetic backend slot two did not admit immediately. |
+| MCPAdmissionWaitFullAndRecovery | `handler.go`: allocate queue `depth: 4` instead of `limits.MCPWaiting` | Fifth waiter was refused rather than completing. |
+| MCPAdmissionTimeoutNeverDispatchesWrite | `admission.go`: use `Add(200*time.Millisecond)` instead of `Add(q.wait)` | Wait expired at 200 ms rather than 500 ms. |
+| MCPAdmissionFIFOWithCanceledReservations | `admission.go`: notify the last waiter instead of `q.waiters[0]` | Wrong waiter promoted before the live head. |
+| MCPAdmissionShutdownWakesQueuedWrite | `admission.go`: `break` after the first signal in the shutdown loop | Pending writes were not woken immediately. |
+| MCPAdmissionControlsBypassQueuedData | `handler.go`: classify `tools/list` as resource/data work | Tool discovery returned 503 with a full queue. |
+
+All 15 runtime mutants were killed by the named tests. The detached restored
+server, DAV and MCP Skills packages passed five repetitions, and the clean
+Windows integration tests passed. No mutants or staged benchmark versions
+were committed to the final branch.
+### Issue #29 configuration parser
+
+Windows, CGO_ENABLED=0, GOTOOLCHAIN=local, GOWORK=off.
+Clean: go test ./internal/config -count=1 -v PASS, including existing config
+tests and all four added tests. Each variant used an external Go overlay,
+one source change at a time, without writing the shared worktree:
+go test -overlay <CFG-N.json> ./internal/config -run '^<test>$' -count=1 -v.
+
+| ID | Production source edit | Causal result |
+|--|--|--|
+| CFG-1 | concurrency.go timer assignment: time.Millisecond → time.Second | TestConcurrencySettingsDefaultsAndOverrides /partial and /all fail: configured 31 ms becomes 31 s and 291 ms becomes 4m51s. |
+| CFG-2 | concurrency.go mcp_active ceiling 16 → 17 | TestConcurrencySettingsEnforceBoundsAndStrictYAML/mcp_active rejects 17 on clean code; mutant reports invalid boundary accepted. |
+| CFG-3 | mcp_accounts.go remove slices.Sort(s.mcpUsernames[:s.mcpUsernameCount]) | TestMCPAccountListExplicitOptIn fails comparable normalized set on reordered/case-varied YAML. |
+| CFG-4 | mcp_accounts.go duplicate check slices.Contains(..., name) → slices.Contains(..., item.Value) | TestMCPAccountListRejectsAmbiguousOrMalformedSettings/exact_repeat and /case_repeat fail because duplicate allowed. |
+
+Four valid mutants were killed at expectations, exit 1 each; no mutant in the
+shared tree. The grouped bounds and strict-YAML subtests also check every
+option's positive ceiling and ceiling+1, types, duplicate keys, and no raw
+error output. Real listener/backend admission policy is covered elsewhere.
+
+### Explicit quota in the preexisting slow-discovery regression
+
+The integrated full run caught this test's old assumption that the default
+server-wide request cap was four. The test now configures `max_requests: 4`
+for its own disposable server and requires the exact global `requests` marker
+on the fifth call. It still checks recovery and remains otherwise unchanged.
+
+`go test ./internal/cli -run '^TestRunServerBoundsSlowDiscoveryAndNeverFetchesDestination$' -count=3 -timeout=120s -v`
+passed (6.122s). The isolated C16 mutant replaced
+`g.active >= g.limits.MaxRequests` in `server/requests.go` with
+`g.active >= config.DefaultConcurrency().MaxRequests`. It was killed by the
+missing global admission refusal, then restored (2.249s clean). Test and
+ledger only; the production code and measured fixture configuration did not
+change.
+
 ## Scoped coding and research Skill catalogs
 
 Host: Zen-1000, Windows amd64, Go 1.27.4 with `CGO_ENABLED=0`. Base PR #20 at
@@ -210,3 +345,25 @@ using the respective package and named test (or `top-level/subtest`) as the
 Restored run passed (config 0.072s, MCP Skills 0.032s, CLI 4.979s); 4 killed,
 0 survivors, and 0 invalid/equivalent among the selected mutants. No mutated
 source is committed.
+
+## Scoped catalog reconciliation with the shared queue (PR #27)
+
+Host: Zen, Windows amd64, Go 1.27.4, CGO disabled. Reconcile catalog head
+51b1eb7 with main 8d9901ad (#29). The focused clean assertions passed:
+catalog configuration composes with the explicit default allowlist and tuning;
+the three endpoints use one FIFO queue and one shutdown signal; and DAV, the
+default endpoint, coding and research share the verified account quota without
+sharing route grants.
+
+For each behavioral test below, run the matching package in the clean
+worktree with `go test -p=2 <package> -run ^<test>$ -count=1 -v`, then rerun
+with a Go source overlay that replaces only the stated production expression.
+The overlays were stored outside the repository and did not modify its source.
+
+| Test and package | Temporary production edit | Observed result |
+| --- | --- | --- |
+| TestNamedCatalogSharesDispatchAdmission, internal/mcpskills | Construct a separate dataAdmission using the same limits instead of inheriting base.admission in NewNamedCatalog. | Clean passed; mutant exit 1: catalog bypassed the shared queue (HTTP 200). |
+| TestSkillCatalogSettings, internal/config | Only parse mcp_skill_catalogs when the legacy MCPUsername scalar is nonempty. | Clean passed; mutant exit 1: default allowlist, catalog grants, and scheduler tuning did not compose. |
+| TestSharedAuthenticatedAccountQuota, internal/server | Count the verified principal separately per HTTP path instead of sharing its quota. | Clean passed; mutant exit 1: the eleventh request returned 200, not account quota 429. |
+
+All three mutations were killed; none was committed.

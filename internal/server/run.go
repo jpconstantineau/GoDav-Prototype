@@ -93,6 +93,15 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 	if settings.DAVPrefix != "/dav/" {
 		return errors.New("unsupported DAV prefix")
 	}
+	limits := settings.Concurrency
+	if httpTest {
+		limits = config.DefaultConcurrency()
+	}
+	if settings.MCPEnabled && !httpTest {
+		if err := validateMCPDataConcurrency(limits.MCPActive, state.Accounts()); err != nil {
+			return err
+		}
+	}
 	var tlsConfig *tls.Config
 	if !httpTest {
 		var err error
@@ -113,7 +122,8 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 	if err := state.Accounts().PrepareFiles(ctx); err != nil {
 		return errors.New("file preparation failed")
 	}
-	users := &requestUsers{logger: logger}
+	users := &requestUsers{logger: logger, limits: limits}
+	davPolicy := dav.RequestPolicy{AuthSlots: limits.AuthSlots, Admit: users.admitAccount, MCPUsers: settings.MCPAllowedUsernames()}
 	protocols := &http.Protocols{}
 	protocols.SetHTTP1(true)
 	fileService := files.New(state.Accounts())
@@ -126,7 +136,7 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 		if err != nil {
 			return errors.New("MCP configuration invalid")
 		}
-		endpoints := map[string]dav.MCPEndpoint{"/mcp": {Handler: mcp, Users: []string{settings.MCPUsername}}}
+		endpoints := map[string]dav.MCPEndpoint{"/mcp": {Handler: mcp, Users: settings.MCPAllowedUsernames()}}
 		for _, spec := range settings.MCPSkillCatalogs {
 			if spec.Name == "" {
 				continue
@@ -137,9 +147,10 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 			}
 			endpoints["/mcp/catalogs/"+spec.Name] = dav.MCPEndpoint{Handler: catalog, Users: spec.Users()}
 		}
-		handler = dav.HandlerWithMCPEndpoints(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes, endpoints)
+		users.mcp = mcp
+		handler = dav.HandlerWithMCPEndpoints(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes, endpoints, davPolicy)
 	default:
-		handler = dav.Handler(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes)
+		handler = dav.HandlerWithRequestPolicy(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes, nil, davPolicy)
 	}
 	requestCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
 	srv := &http.Server{
@@ -164,7 +175,7 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 	}
 	done := make(chan error, 1)
 	go func() {
-		var transport net.Listener = &boundedListener{Listener: listener, permits: make(chan struct{}, maxConnections), logger: logger}
+		var transport net.Listener = &boundedListener{Listener: listener, permits: make(chan struct{}, limits.MaxConnections), logger: logger}
 		if !httpTest {
 			transport = tls.NewListener(transport, srv.TLSConfig)
 		}

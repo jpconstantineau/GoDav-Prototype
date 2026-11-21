@@ -36,12 +36,14 @@ release ownership/path pins.
 
 | Resource | Prototype limit |
 | --- | --- |
-| Accepted transport connections | 16 |
-| Admitted application requests | 4 |
+| Accepted transport connections (HTTP/1) | 128 |
+| Admitted application requests, per server | 100 |
+| Admitted requests, per authenticated account | 10 |
 | Receiving PUTs | 2 |
-| Concurrent account lookup/password verification | 2 |
+| Concurrent account lookup/password verification | 10 |
 | Store acquisition | 2 seconds |
 | Application request context | 10 seconds |
+| MCP active data operations / FIFO waiters / wait | 1 / 5 / 500 ms |
 | Header size/count | 16 KiB / 100 values |
 | Header read / request read-write / idle | 5 / 10 / 30 seconds |
 | max_file_bytes | 32 MiB default; 1 byte through 64 MiB |
@@ -53,9 +55,49 @@ before DAV work; upload permits return at EOF/error before publication. Handlers
 remain counted until exit. Payload limits exclude database pages, driver copies,
 HTTP/TLS buffers, authentication memory and small metadata.
 
+The authenticated quota counts the stable verified account ID across DAV and
+MCP, including body, queue, storage and synchronous response work. At capacity
+it returns HTTP 429 with `GoDav-Rejection: account-requests`. Global
+application exhaustion remains HTTP 503 with `requests`. Anonymous HTTP test
+mode uses the global guard but has no authenticated account quota. The
+listener accepts up to 128 HTTP/1 connections by default (including idle sockets).
+In anonymous HTTP test mode, the global and transport defaults apply, but MCP
+and account quotas are absent and connections are not kept alive.
+Authentication remains fail-fast (`authentication` on slot exhaustion).
+Each Argon2id verification requests 19 MiB working memory; ten simultaneous
+derivations can require roughly 190 MiB before other allocations. This is
+not a process RSS bound. Account lookup can still wait on the existing
+single SQLite gate; ten authentication slots do not create ten store permits.
 GET conservatively reserves 64 MiB per materialized snapshot. PUT reserves declared
 size or configured maximum and still checks actual EOF/size. Metadata reads do
 not reserve content payload. This is not a total process-memory guarantee.
+Configure concurrency at server startup with an optional top-level block.
+Omitted fields use these defaults; existing files do not need a migration.
+
+```yaml
+concurrency:
+  max_connections: 128
+  max_requests: 100
+  max_requests_per_account: 10
+  auth_slots: 10
+  receiving_uploads: 2
+  mcp_active: 1
+  mcp_waiting: 5
+  mcp_wait_ms: 500
+  request_timeout_ms: 10000
+```
+
+All values are positive bounded YAML integers. Maximum override values, in
+the same order as above, are 1024, 512, 128, 16, 32, 16, 32, 5000 and 10000.
+A lower upstream bound can prevent a downstream quota from being reached.
+The request timeout is the application context, not the separate socket
+read/write deadlines; the queue wait is also bounded by that context.
+Restart to change these settings. A server with MCP enabled rejects
+`mcp_active` above the backend's safe capability. SQLite advertises 1; a
+future backend may advertise a higher safe width, but this change neither
+introduces PostgreSQL nor changes SQLite's one-operation/store invariants.
+At the maximum of 16 verifiers, Argon2 alone can request about 304 MiB.
+These ceilings are not a guarantee about total process memory.
 Only documented configuration limits are operator settings.
 
 ## Shutdown and diagnostics

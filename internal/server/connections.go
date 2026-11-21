@@ -6,8 +6,6 @@ import (
 	"sync"
 )
 
-const maxConnections = 16
-
 // Count transport owners before TLS or HTTP can start a goroutine. Excess
 // sockets are closed here, where no parsed HTTP response can be promised.
 type boundedListener struct {

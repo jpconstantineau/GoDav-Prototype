@@ -22,18 +22,6 @@ func (c SkillCatalog) Skills() []string { return strings.Fields(c.skills) }
 
 var pilotSkillName = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-func hasMappingKey(node *yaml.Node, name string) bool {
-	if node.Kind != yaml.MappingNode {
-		return false
-	}
-	for i := 0; i < len(node.Content); i += 2 {
-		if node.Content[i].Value == name {
-			return true
-		}
-	}
-	return false
-}
-
 func parseSkillCatalogs(node *yaml.Node) ([2]SkillCatalog, bool) {
 	var result [2]SkillCatalog
 	entries, ok := mapping(node, "coding", "research")

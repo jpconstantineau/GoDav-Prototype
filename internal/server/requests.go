@@ -2,16 +2,15 @@ package server
 
 import (
 	"context"
-	"github.com/jpconstantineau/GoDav-Prototype/internal/requestlog"
 	"io"
 	"log/slog"
 	"net/http"
 	"sync"
-	"time"
-)
 
-const maxRequests = 4
-const maxReceivingUploads = 2
+	"github.com/jpconstantineau/GoDav-Prototype/internal/config"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/mcpskills"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/requestlog"
+)
 
 // Admission and joining share the same mutex, so no owner can be added after
 // stop. Receiving permits are shorter-lived than request ownership: complete
@@ -22,6 +21,9 @@ type requestUsers struct {
 	active, receiving int
 	owners            sync.WaitGroup
 	logger            *slog.Logger
+	byAccount         map[string]int
+	limits            config.Concurrency
+	mcp               http.Handler
 }
 
 func (g *requestUsers) guard(next http.Handler) http.Handler {
@@ -31,9 +33,9 @@ func (g *requestUsers) guard(next http.Handler) http.Handler {
 		reason := ""
 		if g.stopping {
 			reason = "stopping"
-		} else if g.active >= maxRequests {
+		} else if g.active >= g.limits.MaxRequests {
 			reason = "requests"
-		} else if upload && g.receiving >= maxReceivingUploads {
+		} else if upload && g.receiving >= g.limits.ReceivingUploads {
 			reason = "receiving"
 		}
 		if reason != "" {
@@ -52,7 +54,7 @@ func (g *requestUsers) guard(next http.Handler) http.Handler {
 		}
 		g.mu.Unlock()
 		defer func() { g.mu.Lock(); g.active--; g.mu.Unlock(); g.owners.Done() }()
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), g.limits.RequestTimeout)
 		defer cancel()
 		defer requestlog.Complete(ctx)
 		r = r.WithContext(ctx)
@@ -64,6 +66,32 @@ func (g *requestUsers) guard(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// admitAccount is called only for successfully verified stable principals,
+// while the request already owns global admission. It never waits or retains
+// an authentication permit. Existing outer owners can finish during drain.
+func (g *requestUsers) admitAccount(principal string) (func(), bool) {
+	g.mu.Lock()
+	count := g.byAccount[principal]
+	if principal == "" || count >= g.limits.MaxRequestsPerAccount {
+		g.mu.Unlock()
+		return nil, false
+	}
+	if g.byAccount == nil {
+		g.byAccount = make(map[string]int)
+	}
+	g.byAccount[principal] = count + 1
+	g.mu.Unlock()
+	return func() {
+		g.mu.Lock()
+		if g.byAccount[principal] == 1 {
+			delete(g.byAccount, principal)
+		} else {
+			g.byAccount[principal]--
+		}
+		g.mu.Unlock()
+	}, true
 }
 
 // Body EOF/error releases only the receiving permit, never request ownership.
@@ -79,5 +107,12 @@ func (b *receivingBody) Read(p []byte) (int, error) {
 	}
 	return n, err
 }
-func (g *requestUsers) stop() { g.mu.Lock(); g.stopping = true; g.mu.Unlock() }
+func (g *requestUsers) stop() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.stopping {
+		g.stopping = true
+		mcpskills.StopAdmission(g.mcp)
+	}
+}
 func (g *requestUsers) wait() { g.owners.Wait() }

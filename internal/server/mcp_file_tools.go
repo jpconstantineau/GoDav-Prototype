@@ -14,7 +14,7 @@ import (
 
 func buildMCP(settings config.Settings, service *files.Service) (http.Handler, error) {
 	if settings.MCPFilesRoot == "" {
-		return mcpskills.New(service, settings.MCPSkillsRoot)
+		return mcpskills.NewWithToolsAndAdmission(service, settings.MCPSkillsRoot, nil, settings.Concurrency)
 	}
 	backend, err := mcpfiles.New(service, settings.MCPFilesRoot, settings.MaxFileBytes)
 	if err != nil {
@@ -36,5 +36,5 @@ func buildMCP(settings config.Settings, service *files.Service) (http.Handler, e
 			},
 		})
 	}
-	return mcpskills.NewWithTools(service, settings.MCPSkillsRoot, selected)
+	return mcpskills.NewWithToolsAndAdmission(service, settings.MCPSkillsRoot, selected, settings.Concurrency)
 }

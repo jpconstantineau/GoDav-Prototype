@@ -91,3 +91,7 @@ func (s *AccountStore) Close() error {
 	}
 	return nil
 }
+
+// MaxMCPDataConcurrency reports the safe dispatcher width for the current
+// retained SQLite connection and serial operation gate.
+func (*AccountStore) MaxMCPDataConcurrency() int { return 1 }
