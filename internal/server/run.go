@@ -21,7 +21,7 @@ import (
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localfs"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localstate"
-	"github.com/jpconstantineau/GoDav-Prototype/internal/mcpskills"
+
 	"github.com/jpconstantineau/GoDav-Prototype/internal/sqlite"
 )
 
@@ -121,7 +121,7 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 	case httpTest:
 		handler = dav.HTTPTestHandler(fileService, settings.PublicOrigin, settings.MaxFileBytes)
 	case settings.MCPEnabled:
-		mcp, err := mcpskills.New(fileService, settings.MCPSkillsRoot)
+		mcp, err := buildMCP(settings, fileService)
 		if err != nil {
 			return errors.New("MCP configuration invalid")
 		}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestMCPSettingsOptIn(t *testing.T) {
@@ -32,6 +33,12 @@ func TestMCPSettingsOptIn(t *testing.T) {
 			s, err := Load(p)
 			if (err == nil) != tc.ok || s.MCPEnabled != tc.active {
 				t.Fatalf("enabled=%v error=%v", s.MCPEnabled, err)
+			}
+			if tc.ok && s.MaxFileBytes != 65536 {
+				t.Fatalf("MaxFileBytes = %d, want configured 65536", s.MaxFileBytes)
+			}
+			if tc.ok && s.ShutdownGrace != 5*time.Second {
+				t.Fatalf("ShutdownGrace = %s, want default 5s", s.ShutdownGrace)
 			}
 			if tc.active && (s.MCPSkillsRoot != "Skills" || s.MCPUsername != "FixtureUser") {
 				t.Fatal("scope or account changed")

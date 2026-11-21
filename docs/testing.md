@@ -16,6 +16,13 @@ Tests use disposable state, fixture ACLs/pseudoconsoles and test-client TLS root
 not machine trust changes. Build-tag-only failure fixtures have no production
 runtime switch and are excluded from ordinary/release binaries.
 
+## Mutation checks for new tests
+
+For each new test, verify that it passes on the original code and fails for a
+meaningful temporary change to the behavior it protects. Record the evidence
+and resolve behavioral survivors in [Mutation testing](../mutation%20testing.md).
+Do not commit temporary production mutations.
+
 ## Coverage map
 
 These links lead to executable tests rather than historical run logs.

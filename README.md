@@ -6,6 +6,7 @@ support. Runtime acceptance remains incomplete.
 ## References
 
 - [MCP Skills smoke test](docs/mcp-skills.md): opt-in skills discovery and read-only fallback.
+- [MCP file tools](docs/mcp-files.md): scoped reads and guarded opt-in writes.
 
 - [Build and release](docs/build-identity.md): build or identify an executable.
 - [Disposable HTTP test mode](docs/http-test-mode.md): anonymous localhost-only Explorer / VS Code testing.
