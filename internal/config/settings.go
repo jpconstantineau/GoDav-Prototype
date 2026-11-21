@@ -40,6 +40,7 @@ type Settings struct {
 	MCPUsername          string // legacy single-account YAML spelling
 	MCPFilesRoot         string // optional separate decoded DAV-relative path
 	MCPFileWrites        bool
+	MCPSkillCatalogs     [2]SkillCatalog
 	mcpUsernames         [maxMCPUsernames]string
 	mcpUsernameCount     int
 }
@@ -79,7 +80,7 @@ func Load(filename string) (Settings, error) {
 	}
 	required := []string{"config_version", "listen_address", "public_origin", "dav_prefix", "database_path", "tls", "authentication", "limits"}
 	root, ok := mappingOptional(doc.Content[0], required,
-		"mcp_enabled", "mcp_skills_root", "mcp_username", "mcp_usernames", "mcp_files_root", "mcp_file_writes", "concurrency")
+		"mcp_enabled", "mcp_skills_root", "mcp_username", "mcp_usernames", "mcp_files_root", "mcp_file_writes", "concurrency", "mcp_skill_catalogs")
 	if !ok {
 		return result, errSettings
 	}
@@ -159,6 +160,15 @@ func Load(filename string) (Settings, error) {
 	} else if root["mcp_skills_root"] != nil || root["mcp_username"] != nil || root["mcp_usernames"] != nil ||
 		root["mcp_files_root"] != nil || root["mcp_file_writes"] != nil {
 		return Settings{}, errSettings
+	}
+	if root["mcp_skill_catalogs"] != nil {
+		if !result.MCPEnabled {
+			return Settings{}, errSettings
+		}
+		result.MCPSkillCatalogs, ok = parseSkillCatalogs(root["mcp_skill_catalogs"])
+		if !ok {
+			return Settings{}, errSettings
+		}
 	}
 	paths := []string{absolute}
 	for _, node := range []*yaml.Node{root["database_path"], tls["cert_file"], tls["key_file"]} {

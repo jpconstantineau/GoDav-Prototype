@@ -103,10 +103,16 @@ func TestSharedAuthenticatedAccountQuota(t *testing.T) {
 	}
 	g := requestUsers{limits: config.DefaultConcurrency(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	mcp := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
-	h := g.guard(dav.HandlerWithAdmission(quotaAccounts{"fixtureowner": owner, "fixturereader": reader}, files.New(quotaRepo{}), "https://localhost:8443", 1, "FixtureOwner", mcp, g.admitAccount))
+	endpoints := map[string]dav.MCPEndpoint{
+		"/mcp":                   {Handler: mcp, Users: []string{"FixtureOwner"}},
+		"/mcp/catalogs/coding":   {Handler: mcp, Users: []string{"FixtureOwner"}},
+		"/mcp/catalogs/research": {Handler: mcp, Users: []string{"FixtureOwner", "FixtureReader"}},
+	}
+	policy := dav.RequestPolicy{Admit: g.admitAccount, AuthSlots: config.DefaultConcurrency().AuthSlots}
+	h := g.guard(dav.HandlerWithMCPEndpoints(quotaAccounts{"fixtureowner": owner, "fixturereader": reader}, files.New(quotaRepo{}), "https://localhost:8443", 1, endpoints, policy))
 	run := func(w http.ResponseWriter, path, name, password string) {
 		method := "OPTIONS"
-		if path == "/mcp" {
+		if strings.HasPrefix(path, "/mcp") {
 			method = "POST"
 		}
 		r := httptest.NewRequest(method, "https://localhost:8443"+path, nil)
@@ -135,8 +141,11 @@ func TestSharedAuthenticatedAccountQuota(t *testing.T) {
 		pending = append(pending, pendingCall)
 		started := make(chan int, 1)
 		path, want := "/dav/", 200
-		if i%2 == 1 {
+		switch i % 3 {
+		case 1:
 			path, want = "/mcp", 204
+		case 2:
+			path, want = "/mcp/catalogs/coding", 204
 		}
 		go func() {
 			defer close(pendingCall.done)
@@ -151,7 +160,7 @@ func TestSharedAuthenticatedAccountQuota(t *testing.T) {
 		run(w, path, user, pass)
 		return w
 	}
-	for _, path := range []string{"/dav/", "/mcp"} {
+	for _, path := range []string{"/dav/", "/mcp", "/mcp/catalogs/coding", "/mcp/catalogs/research"} {
 		w := request(path, "FIXTUREOWNER", pwd)
 		if w.Code != 429 || w.Header().Get("GoDav-Rejection") != "account-requests" {
 			t.Fatalf("eleventh request across DAV and MCP got %d/%s, want account 429", w.Code, w.Header().Get("GoDav-Rejection"))
@@ -176,6 +185,12 @@ func TestSharedAuthenticatedAccountQuota(t *testing.T) {
 	}
 	for _, release := range readerReleases {
 		release()
+	}
+	if w := request("/mcp/catalogs/research", "FIXTUREREADER", readerPwd); w.Code != 204 {
+		t.Fatalf("distinct verified catalog account blocked: %d", w.Code)
+	}
+	if w := request("/mcp", "FixtureReader", readerPwd); w.Code != 403 {
+		t.Fatalf("named catalog permission leaked to default endpoint: %d", w.Code)
 	}
 	close(pending[0].release)
 	<-pending[0].done
