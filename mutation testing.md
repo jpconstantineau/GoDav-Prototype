@@ -299,3 +299,18 @@ Four valid mutants were killed at expectations, exit 1 each; no mutant in the
 shared tree. The grouped bounds and strict-YAML subtests also check every
 option's positive ceiling and ceiling+1, types, duplicate keys, and no raw
 error output. Real listener/backend admission policy is covered elsewhere.
+
+### Explicit quota in the preexisting slow-discovery regression
+
+The integrated full run caught this test's old assumption that the default
+server-wide request cap was four. The test now configures `max_requests: 4`
+for its own disposable server and requires the exact global `requests` marker
+on the fifth call. It still checks recovery and remains otherwise unchanged.
+
+`go test ./internal/cli -run '^TestRunServerBoundsSlowDiscoveryAndNeverFetchesDestination$' -count=3 -timeout=120s -v`
+passed (6.122s). The isolated C16 mutant replaced
+`g.active >= g.limits.MaxRequests` in `server/requests.go` with
+`g.active >= config.DefaultConcurrency().MaxRequests`. It was killed by the
+missing global admission refusal, then restored (2.249s clean). Test and
+ledger only; the production code and measured fixture configuration did not
+change.

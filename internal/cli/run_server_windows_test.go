@@ -687,6 +687,12 @@ func TestRunServerContextStopReleasesOwnershipAfterHTTP(t *testing.T) {
 func TestRunServerBoundsSlowDiscoveryAndNeverFetchesDestination(t *testing.T) {
 	bin := development(t)
 	f := newServerFixture(t, bin)
+	// Use an explicit small budget to exercise the live request guard without
+	// consuming the normal default of 100 requests.
+	config := append(fixtureBytes(t, f.config), []byte("\nconcurrency:\n  max_requests: 4\n")...)
+	if err := os.WriteFile(f.config, config, 0600); err != nil {
+		t.Fatal("slow discovery fixture configuration failed")
+	}
 	p := startServer(t, bin, f)
 	defer p.stop()
 	u, _ := url.Parse(f.origin)
@@ -713,7 +719,7 @@ func TestRunServerBoundsSlowDiscoveryAndNeverFetchesDestination(t *testing.T) {
 		response := davRequest(t, client, f, "OPTIONS", "/dav/", true)
 		io.Copy(io.Discard, response.Body)
 		response.Body.Close()
-		if response.StatusCode == 503 {
+		if response.StatusCode == 503 && response.Header.Get("GoDav-Rejection") == "requests" {
 			overloaded = true
 			break
 		}
