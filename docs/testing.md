@@ -39,7 +39,7 @@ These links lead to executable tests rather than historical run logs.
 | Metadata/conditions/lifecycle | [properties](../internal/cli/metadata_conditions_windows_test.go), [bounds](../internal/cli/metadata_bounds_windows_test.go) |
 | Locks/principals/restart | [locks](../internal/cli/locks_windows_test.go), [lifecycle](../internal/cli/locks_lifecycle_windows_test.go) |
 | MOVE/DELETE composition | [MOVE](../internal/cli/move_windows_test.go), [DELETE](../internal/cli/delete_windows_test.go), [combined](../internal/cli/move_delete_windows_test.go) |
-| Admission/deadlines/shutdown | [bounds](../internal/cli/bounds_windows_test.go) |
+| Admission/deadlines/shutdown | [bounds](../internal/cli/bounds_windows_test.go), [staged writer](../internal/cli/staged_writer_windows_test.go) |
 | Service management/reporting | [manager](../internal/service/manager_test.go), [host](../internal/cli/service_host_windows_test.go), [policy](../internal/cli/service_policy_windows_test.go), [reporting](../internal/cli/service_reporting_windows_test.go) |
 
 Real loopback HTTPS/SQLite and executable reopen test public behavior.
@@ -48,6 +48,10 @@ not establish real service logon/effective token access. Loopback fixtures pin
 disposable IPv4 endpoints while retaining hostname/certificate verification.
 They do not validate machine DNS or native-client interoperability. An automated
 Explorer-like sequence is not an actual Explorer acceptance run.
+
+The staged-writer test authenticates both PUTs before one takes the store gate.
+It distinguishes a fully received PUT's operation timeout from a blocked
+authentication lookup and checks both prior bytes and ETags after restart.
 
 ## Recorded baseline
 
@@ -70,6 +74,8 @@ Dated proof logs and slice reviews are not maintained product documentation.
   access denial. Conservative ACL checks do not replace that acceptance.
 - Broader real SCM failure/pending/shutdown and retained service diagnostics are
   not fully validated.
+- Foreground Ctrl+C coverage includes PUT, PROPPATCH and DELETE. MOVE's
+  precommit cancellation is exercised by client disconnect, not foreground stop.
 - Real cross-volume service sessions remain unproved on the one-volume host.
 - Linux runtime execution is untested.
 - Actual Explorer/VS Code trusted-HTTPS acceptance and WsgiDAV trace comparison
