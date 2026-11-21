@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/config"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/requestlog"
 )
@@ -104,14 +105,18 @@ func TestMCPAdmissionWaitFullAndRecovery(t *testing.T) {
 			t.Fatal("earlier overlapping call did not wait")
 		default:
 		}
+		more := fillRemainingQueue(ctx, h, "read_file")
 		queueStatus(t, queueRequest(ctx, h, "tools/call", "read_file", false), 503, "mcp-full", "1")
 		close(release)
 		queueStatus(t, <-first, 200, "", "")
 		queueStatus(t, <-waiter, 200, "", "")
+		for _, done := range more {
+			queueStatus(t, <-done, 200, "", "")
+		}
 		queueStatus(t, queueRequest(ctx, h, "tools/call", "read_file", false), 200, "", "")
 		out := logs.String()
 		if !strings.Contains(out, "msg=mcp-admission class=file-read result=full") ||
-			!strings.Contains(out, "queued=true") || !strings.Contains(out, "waiting=1") ||
+			!strings.Contains(out, "queued=true") || !strings.Contains(out, "waiting=5") ||
 			!strings.Contains(out, "msg=mcp-execution class=file-read result=complete") ||
 			!strings.Contains(out, "request_id=42") {
 			t.Fatal("missing coarse correlated queue diagnostics")
@@ -127,6 +132,7 @@ func TestMCPAdmissionControlsBypassQueuedData(t *testing.T) {
 		<-started
 		queued := startQueueCall(t.Context(), h, "read_file", false)
 		synctest.Wait()
+		fillRemainingQueue(t.Context(), h, "read_file")
 		for _, method := range []string{"server/discover", "tools/list", "ping"} {
 			w := queueRequest(t.Context(), h, method, "", false)
 			if w.Code != 200 {
@@ -166,7 +172,7 @@ func TestMCPAdmissionTimeoutNeverDispatchesWrite(t *testing.T) {
 		waiter := startQueueCall(t.Context(), h, "edit_file", false)
 		synctest.Wait()
 		w := <-waiter // the bubble's clock advances, not the wall clock
-		if time.Since(start) != dataQueueWait {
+		if time.Since(start) != 500*time.Millisecond {
 			t.Fatalf("wrong queue deadline: %s", time.Since(start))
 		}
 		queueStatus(t, w, 503, "mcp-timeout", "1")
@@ -187,7 +193,7 @@ func TestMCPAdmissionCancellationWinsRelease(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		var gate dataAdmission
+		gate := fixtureAdmission()
 		if got, _ := gate.acquire(t.Context()); got != admitted {
 			t.Fatal("cannot occupy gate")
 		}
@@ -195,7 +201,7 @@ func TestMCPAdmissionCancellationWinsRelease(t *testing.T) {
 		go func() { outcome, _ := gate.acquire(ctx); done <- outcome }()
 		synctest.Wait()
 		gate.mu.Lock()
-		gate.active = false
+		gate.active = 0
 		gate.notify()
 		cancel()
 		gate.mu.Unlock()
@@ -224,9 +230,13 @@ func TestMCPAdmissionShutdownWakesQueuedWrite(t *testing.T) {
 		<-started
 		waiter := startQueueCall(t.Context(), h, "edit_file", false)
 		synctest.Wait()
+		more := fillRemainingQueue(t.Context(), h, "edit_file")
 		startedAt := time.Now()
 		StopAdmission(h)
 		queueStatus(t, <-waiter, 503, "mcp-stopping", "1")
+		for _, done := range more {
+			queueStatus(t, <-done, 503, "mcp-stopping", "1")
+		}
 		if time.Since(startedAt) != 0 {
 			t.Fatal("shutdown did not wake the pending request immediately")
 		}
@@ -236,5 +246,133 @@ func TestMCPAdmissionShutdownWakesQueuedWrite(t *testing.T) {
 		if writes.Load() != 0 {
 			t.Fatal("stopped queue dispatched a write")
 		}
+	})
+}
+
+func fillRemainingQueue(ctx context.Context, h http.Handler, tool string) []<-chan *httptest.ResponseRecorder {
+	var pending []<-chan *httptest.ResponseRecorder
+	for range 4 {
+		pending = append(pending, startQueueCall(ctx, h, tool, false))
+		synctest.Wait()
+	}
+	return pending
+}
+
+func TestMCPAdmissionFIFOWithCanceledReservations(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		q := fixtureAdmission()
+		if got, _ := q.acquire(t.Context()); got != admitted {
+			t.Fatal("can't hold active permit")
+		}
+		type entry struct {
+			id      int
+			elapsed time.Duration
+		}
+		order := make(chan entry, 5)
+		began := time.Now()
+		outcomes := make([]chan admissionResult, 5)
+		cancels := make([]context.CancelFunc, 5)
+		for i := range outcomes {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancels[i] = cancel
+			defer cancel()
+			outcomes[i] = make(chan admissionResult, 1)
+			go func() {
+				got, _ := q.acquire(ctx)
+				if got == admitted {
+					order <- entry{i, time.Since(began)}
+					time.Sleep(25 * time.Millisecond) // synthetic execution in the bubble, not overlap setup
+					q.release()
+				}
+				outcomes[i] <- got
+			}()
+			synctest.Wait()
+			if active, pending := q.occupancy(); active != 1 || pending != i+1 {
+				t.Fatalf("reservation depth after enqueue: active=%d pending=%d, want 1/%d", active, pending, i+1)
+			}
+		}
+		if got, _ := q.acquire(t.Context()); got != queueFull {
+			t.Fatalf("seventh request: %q, want full", got)
+		}
+		cancels[0]()
+		cancels[2]()
+		for _, i := range []int{0, 2} {
+			if got := <-outcomes[i]; got != queueCancelled {
+				t.Fatalf("canceled waiter %d: %q", i, got)
+			}
+		}
+		if active, pending := q.occupancy(); active != 1 || pending != 3 {
+			t.Fatalf("cancellation leaked a reservation: %d/%d", active, pending)
+		}
+		q.release()
+		for position, want := range []int{1, 3, 4} {
+			got := <-order
+			if got.id != want || got.elapsed != time.Duration(position)*25*time.Millisecond {
+				t.Errorf("FIFO dispatch got waiter %d at %s, want %d at %s", got.id, got.elapsed, want, time.Duration(position)*25*time.Millisecond)
+			}
+			if got := <-outcomes[want]; got != admitted {
+				t.Fatalf("live waiter %d: %q", want, got)
+			}
+		}
+		if active, pending := q.occupancy(); active != 0 || pending != 0 {
+			t.Fatalf("gate leaked capacity: %d/%d", active, pending)
+		}
+	})
+}
+
+func fixtureAdmission() dataAdmission {
+	c := config.DefaultConcurrency()
+	return dataAdmission{capacity: c.MCPActive, depth: c.MCPWaiting, wait: c.MCPWait}
+}
+
+func TestMCPAdmissionMultipleActiveAndFIFO(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		q := dataAdmission{capacity: 2, depth: 3, wait: time.Second}
+		for i := range 2 {
+			got, queued := q.acquire(t.Context())
+			if got != admitted || queued {
+				t.Fatalf("synthetic backend slot %d was not immediately admitted: %q", i+1, got)
+			}
+		}
+		admittedOrder := make(chan int, 3)
+		for i := range 3 {
+			go func() {
+				if got, _ := q.acquire(t.Context()); got != admitted {
+					t.Errorf("queued synthetic request %d did not dispatch: %q", i, got)
+					return
+				}
+				admittedOrder <- i
+			}()
+			synctest.Wait()
+		}
+		if active, n := q.occupancy(); active != 2 || n != 3 {
+			t.Fatalf("want two active, three waiting: got %d/%d", active, n)
+		}
+		if got, _ := q.acquire(t.Context()); got != queueFull {
+			t.Fatalf("sixth request wasn't rejected: %q", got)
+		}
+		q.release()
+		if got := <-admittedOrder; got != 0 {
+			t.Fatalf("first release promoted %d, want 0", got)
+		}
+		if active, n := q.occupancy(); active != 2 || n != 2 {
+			t.Fatalf("single release changed more than one owner: %d/%d", active, n)
+		}
+		// Open two synthetic slots together. The head's promotion notifies
+		// the next reservation, even without another release.
+		q.mu.Lock()
+		q.active -= 2
+		q.notify()
+		q.mu.Unlock()
+		synctest.Wait()
+		if active, n := q.occupancy(); active != 2 || n != 0 {
+			t.Fatalf("two free slots didn't both refill: %d/%d", active, n)
+		}
+		first, second := <-admittedOrder, <-admittedOrder
+		if first+second != 3 || first == second {
+			t.Fatalf("unexpected promotions: %d %d", first, second)
+		}
+		q.release()
+		q.release()
 	})
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/config"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/mcpskills"
 )
@@ -27,7 +28,7 @@ func TestRequestUsersStopClosesMCPAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	users := requestUsers{logger: slog.New(slog.NewTextHandler(io.Discard, nil)), mcp: mcp}
+	users := requestUsers{limits: config.DefaultConcurrency(), logger: slog.New(slog.NewTextHandler(io.Discard, nil)), mcp: mcp}
 	request := func(h http.Handler) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "https://localhost/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","arguments":{}}}`))
 		r.Header.Set("Content-Type", "application/json")

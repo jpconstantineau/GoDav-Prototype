@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/winpath"
 
@@ -35,11 +34,14 @@ type Settings struct {
 	AuthenticationMethod string
 	MaxFileBytes         int64
 	ShutdownGrace        time.Duration
+	Concurrency          Concurrency
 	MCPEnabled           bool
 	MCPSkillsRoot        string // decoded DAV-relative path
-	MCPUsername          string // sole account opted in
+	MCPUsername          string // legacy single-account YAML spelling
 	MCPFilesRoot         string // optional separate decoded DAV-relative path
 	MCPFileWrites        bool
+	mcpUsernames         [maxMCPUsernames]string
+	mcpUsernameCount     int
 }
 
 var errSettings = errors.New("invalid or inaccessible settings")
@@ -75,19 +77,13 @@ func Load(filename string) (Settings, error) {
 	if !plainNodes(&doc) {
 		return result, errSettings
 	}
-	keys := []string{"config_version", "listen_address", "public_origin", "dav_prefix", "database_path", "tls", "authentication", "limits"}
-	root, ok := mapping(doc.Content[0], keys...)
+	required := []string{"config_version", "listen_address", "public_origin", "dav_prefix", "database_path", "tls", "authentication", "limits"}
+	root, ok := mappingOptional(doc.Content[0], required,
+		"mcp_enabled", "mcp_skills_root", "mcp_username", "mcp_usernames", "mcp_files_root", "mcp_file_writes", "concurrency")
 	if !ok {
-		keys = append(keys, "mcp_enabled", "mcp_skills_root", "mcp_username")
-		root, ok = mapping(doc.Content[0], keys...)
+		return result, errSettings
 	}
-	if !ok {
-		keys = append(keys, "mcp_files_root")
-		root, ok = mapping(doc.Content[0], keys...)
-	}
-	if !ok {
-		root, ok = mapping(doc.Content[0], append(keys, "mcp_file_writes")...)
-	}
+	concurrency, ok := parseConcurrency(root["concurrency"])
 	if !ok {
 		return result, errSettings
 	}
@@ -130,6 +126,7 @@ func Load(filename string) (Settings, error) {
 		ConfigVersion: version, ListenAddress: root["listen_address"].Value,
 		PublicOrigin: root["public_origin"].Value, DAVPrefix: root["dav_prefix"].Value,
 		AuthenticationMethod: authentication["method"].Value, MaxFileBytes: maxBytes, ShutdownGrace: time.Duration(graceMS) * time.Millisecond,
+		Concurrency: concurrency,
 	}
 	if result.AuthenticationMethod != "basic" || !validEndpoints(result) || !validPrefix(result.DAVPrefix) {
 		return Settings{}, errSettings
@@ -138,15 +135,14 @@ func Load(filename string) (Settings, error) {
 		if node.Kind != yaml.ScalarNode || node.Tag != "!!bool" || node.Value != "true" {
 			return Settings{}, errSettings
 		}
-		scope, user := root["mcp_skills_root"], root["mcp_username"]
-		if user.Kind != yaml.ScalarNode || user.Tag != "!!str" || !auth.ValidUsername(user.Value) {
+		if !result.loadMCPUsernames(root["mcp_username"], root["mcp_usernames"]) {
 			return Settings{}, errSettings
 		}
-		relative, ok := logicalRoot(scope)
+		relative, ok := logicalRoot(root["mcp_skills_root"])
 		if !ok {
 			return Settings{}, errSettings
 		}
-		result.MCPEnabled, result.MCPSkillsRoot, result.MCPUsername = true, relative, user.Value
+		result.MCPEnabled, result.MCPSkillsRoot = true, relative
 		if filesRoot := root["mcp_files_root"]; filesRoot != nil {
 			path, ok := logicalRoot(filesRoot)
 			if !ok || overlappingRoots(relative, path) {
@@ -155,11 +151,14 @@ func Load(filename string) (Settings, error) {
 			result.MCPFilesRoot = path
 		}
 		if writes := root["mcp_file_writes"]; writes != nil {
-			if writes.Kind != yaml.ScalarNode || writes.Tag != "!!bool" || writes.Value != "true" {
+			if result.MCPFilesRoot == "" || writes.Kind != yaml.ScalarNode || writes.Tag != "!!bool" || writes.Value != "true" {
 				return Settings{}, errSettings
 			}
 			result.MCPFileWrites = true
 		}
+	} else if root["mcp_skills_root"] != nil || root["mcp_username"] != nil || root["mcp_usernames"] != nil ||
+		root["mcp_files_root"] != nil || root["mcp_file_writes"] != nil {
+		return Settings{}, errSettings
 	}
 	paths := []string{absolute}
 	for _, node := range []*yaml.Node{root["database_path"], tls["cert_file"], tls["key_file"]} {
@@ -219,6 +218,10 @@ func plainNodes(node *yaml.Node) bool {
 		if node.Tag != "!!map" {
 			return false
 		}
+	case yaml.SequenceNode:
+		if node.Tag != "!!seq" {
+			return false
+		}
 	case yaml.ScalarNode:
 		if node.Tag != "!!str" && node.Tag != "!!int" && node.Tag != "!!bool" {
 			return false
@@ -235,26 +238,38 @@ func plainNodes(node *yaml.Node) bool {
 }
 
 func mapping(node *yaml.Node, keys ...string) (map[string]*yaml.Node, bool) {
-	if node == nil || node.Kind != yaml.MappingNode || len(node.Content) != 2*len(keys) {
+	return mappingOptional(node, keys)
+}
+
+func mappingOptional(node *yaml.Node, required []string, optional ...string) (map[string]*yaml.Node, bool) {
+	if node == nil || node.Kind != yaml.MappingNode || len(node.Content) < 2*len(required) ||
+		len(node.Content) > 2*(len(required)+len(optional)) {
 		return nil, false
 	}
-	values := make(map[string]*yaml.Node, len(keys))
+	values := make(map[string]*yaml.Node, len(node.Content)/2)
 	for i := 0; i < len(node.Content); i += 2 {
 		key := node.Content[i]
 		if key.Kind != yaml.ScalarNode || key.Tag != "!!str" || values[key.Value] != nil {
 			return nil, false
 		}
 		known := false
-		for _, allowed := range keys {
-			if key.Value == allowed {
-				known = true
-				break
+		for _, keys := range [][]string{required, optional} {
+			for _, allowed := range keys {
+				if key.Value == allowed {
+					known = true
+					break
+				}
 			}
 		}
 		if !known {
 			return nil, false
 		}
 		values[key.Value] = node.Content[i+1]
+	}
+	for _, key := range required {
+		if values[key] == nil {
+			return nil, false
+		}
 	}
 	return values, true
 }

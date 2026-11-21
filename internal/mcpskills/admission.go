@@ -2,11 +2,10 @@ package mcpskills
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 )
-
-const dataQueueWait = 200 * time.Millisecond
 
 type admissionResult string
 
@@ -18,14 +17,16 @@ const (
 	queueCancelled admissionResult = "cancelled"
 )
 
-// dataAdmission retains the existing single active data operation and permits
-// one pending waiter. Reservation and promotion are atomic; a newly arriving
+// dataAdmission gives an explicitly bounded number of operations and FIFO
+// waiters permits. Reservation and promotion are atomic; a newly arriving
 // request may not bypass a pending waiter. No waiter retains a database permit.
 type dataAdmission struct {
-	mu       sync.Mutex
-	active   bool
-	stopping bool
-	waiter   chan struct{}
+	mu              sync.Mutex
+	active          int
+	capacity, depth int
+	wait            time.Duration
+	stopping        bool
+	waiters         []chan struct{}
 }
 
 func (q *dataAdmission) acquire(ctx context.Context) (admissionResult, bool) {
@@ -37,17 +38,17 @@ func (q *dataAdmission) acquire(ctx context.Context) (admissionResult, bool) {
 	case q.stopping:
 		q.mu.Unlock()
 		return queueStopping, false
-	case q.waiter != nil:
+	case len(q.waiters) >= q.depth:
 		q.mu.Unlock()
 		return queueFull, false
-	case !q.active:
-		q.active = true
+	case q.active < q.capacity && len(q.waiters) == 0:
+		q.active++
 		q.mu.Unlock()
 		return admitted, false
 	}
 	wake := make(chan struct{}, 1)
-	q.waiter = wake
-	deadline := time.Now().Add(dataQueueWait)
+	q.waiters = append(q.waiters, wake)
+	deadline := time.Now().Add(q.wait)
 	q.mu.Unlock()
 
 	wait, cancel := context.WithDeadline(ctx, deadline)
@@ -59,9 +60,13 @@ func (q *dataAdmission) acquire(ctx context.Context) (admissionResult, bool) {
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.waiter = nil
-	// Cancellation, the waiting deadline, and shutdown take priority even
-	// when capacity became available at the same time as one of them.
+	// The waiter owns its reservation until it exits. A canceled or expired
+	// head hands the wakeup to the next reservation; no newcomer can barge.
+	defer func() {
+		i := slices.Index(q.waiters, wake)
+		q.waiters = slices.Delete(q.waiters, i, i+1)
+		q.notify()
+	}()
 	switch {
 	case contextEnded(ctx):
 		return queueCancelled, true
@@ -70,23 +75,29 @@ func (q *dataAdmission) acquire(ctx context.Context) (admissionResult, bool) {
 	case !time.Now().Before(deadline):
 		return queueTimeout, true
 	default:
-		q.active = true
+		// Only release/cleanup can signal the queue head while running.
+		q.active++
 		return admitted, true
 	}
 }
 
-func (q *dataAdmission) notify() {
-	if q.waiter != nil {
-		select {
-		case q.waiter <- struct{}{}:
-		default:
-		}
+func signalWaiter(wake chan struct{}) {
+	select {
+	case wake <- struct{}{}:
+	default:
 	}
 }
 
+// notify signals only the head once the active operation has released. The
+// head keeps its reservation through the subsequent locked promotion check.
+func (q *dataAdmission) notify() {
+	if q.active < q.capacity && !q.stopping && len(q.waiters) > 0 {
+		signalWaiter(q.waiters[0])
+	}
+}
 func (q *dataAdmission) release() {
 	q.mu.Lock()
-	q.active = false
+	q.active--
 	q.notify()
 	q.mu.Unlock()
 }
@@ -94,21 +105,16 @@ func (q *dataAdmission) release() {
 func (q *dataAdmission) stop() {
 	q.mu.Lock()
 	q.stopping = true
-	q.notify()
+	for _, wake := range q.waiters {
+		signalWaiter(wake)
+	}
 	q.mu.Unlock()
 }
 
 func (q *dataAdmission) occupancy() (int, int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	active, waiting := 0, 0
-	if q.active {
-		active = 1
-	}
-	if q.waiter != nil {
-		waiting = 1
-	}
-	return active, waiting
+	return q.active, len(q.waiters)
 }
 
 func contextEnded(ctx context.Context) bool {

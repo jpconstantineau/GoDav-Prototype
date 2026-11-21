@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/config"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/requestlog"
 )
@@ -46,6 +47,16 @@ func New(service *files.Service, scope string) (http.Handler, error) {
 	return NewWithTools(service, scope, nil)
 }
 func NewWithTools(service *files.Service, scope string, extra []Tool) (http.Handler, error) {
+	defaults := config.DefaultConcurrency()
+	return NewWithToolsAndAdmission(service, scope, extra, defaults)
+}
+
+// NewWithToolsAndAdmission sets the validated dispatcher limits. The server
+// checks the storage backend's safe ceiling before constructing the handler.
+func NewWithToolsAndAdmission(service *files.Service, scope string, extra []Tool, limits config.Concurrency) (http.Handler, error) {
+	if limits.MCPActive < 1 || limits.MCPWaiting < 1 || limits.MCPWait <= 0 {
+		return nil, errors.New("invalid MCP admission limits")
+	}
 	if service == nil {
 		return nil, errors.New("missing file service")
 	}
@@ -59,7 +70,7 @@ func NewWithTools(service *files.Service, scope string, extra []Tool) (http.Hand
 		}
 		seen[t.Name] = true
 	}
-	return &handler{service, scope, append([]Tool(nil), extra...), &dataAdmission{}}, nil
+	return &handler{service, scope, append([]Tool(nil), extra...), &dataAdmission{capacity: limits.MCPActive, depth: limits.MCPWaiting, wait: limits.MCPWait}}, nil
 }
 
 type request struct {
