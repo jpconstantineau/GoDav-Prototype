@@ -367,3 +367,24 @@ The overlays were stored outside the repository and did not modify its source.
 | TestSharedAuthenticatedAccountQuota, internal/server | Count the verified principal separately per HTTP path instead of sharing its quota. | Clean passed; mutant exit 1: the eleventh request returned 200, not account quota 429. |
 
 All three mutations were killed; none was committed.
+
+### Issue #12: fully staged writer wait on the real HTTPS process
+
+Windows, Go 1.27.4, local toolchain with CGO and Go workspaces disabled.
+Focused command:
+
+    go test ./internal/cli -run '^TestBoundsFullyStagedWriterWaitTimesOut$' -count=3 -timeout 3m -v
+
+Clean code passed all three repetitions (43.324s for the package). In a separate
+detached worktree, changing only the SQLite gate's
+context.WithTimeout(ctx, 2*time.Second) to context.WithTimeout(ctx, 6*time.Second)
+and running the same test with -count=1 returned exit 1 (22.443s):
+"staged writer exceeded the 2s gate wait budget." Restored the detached
+production file and confirmed an empty diff; clean branch never carried the
+mutant. A source-copy mutant is necessary because the test builds and drives
+its own real CLI and tagged fixture executable, not just the test binary.
+
+Both requests reach their body before either can publish, distinguishing a
+waiter already past authentication from an account lookup stalled on the same
+store gate. This exercises timeout and rollback, not general shutdown coverage
+or cross-backend performance.
