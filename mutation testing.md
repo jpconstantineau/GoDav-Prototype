@@ -314,3 +314,27 @@ passed (6.122s). The isolated C16 mutant replaced
 missing global admission refusal, then restored (2.249s clean). Test and
 ledger only; the production code and measured fixture configuration did not
 change.
+
+## Issue #25: Durable background indexing engine
+
+Windows with Go 1.27.4, CGO disabled. Clean and restored:
+`go test ./internal/indexing ./internal/sqlite ./internal/mcpskills -run 'TestIndexing|TestEngineKeeps|TestMCPAdmissionWaitFull' -count=1 -v`
+passed all nine covered tests, including two revocation subtests. The persistent
+job tests use separately generated fixture accounts and disposable on-disk
+SQLite, and the scheduling tests use a synchronized virtual clock.
+
+Each row was applied alone through `go test -overlay <ID>.json ./internal/<package> -run '^<test>$' -count=1 -v`;
+the overlay changed one production file without changing the branch. All had
+exit 1 at the stated assertion, not a compiler error. No mutants were committed.
+
+| ID | Test | Temporary production change | Expected failure observed |
+| --- | --- | --- | --- |
+| IX1 | TestIndexingDurablePauseResumeAndOwnership | `index_store.go`: clear the durable work table when preparing an already-existing index. | Progress disappeared after reopening the paused job. |
+| IX2 | TestIndexingRejectsStaleAncestorSpellingAndDeletedSave | `index_work.go`: reject stale candidates by ETag alone instead of comparing all metadata. | An ancestor-only case change incorrectly advanced the checkpoint. |
+| IX3 | TestIndexingReconcilesBeforeCompletionAndCancelsPreparedWork | `index_work.go`: take the completed branch regardless of manifest change. | Job reported completion before it processed the changed scope. |
+| IX4 | TestIndexingStorePriorityAndQuietWindow | `index_priority.go`: use half the requested quiet period. | Background acquired the slot before 100 ms quiet elapsed. |
+| IX5 | TestIndexingPublicationAndCheckpointRollBackTogether | `index_work.go`: commit the transaction on the synthetic checkpoint-update failure. | An FTS hit survived without the associated progress commit. |
+| IX6 | TestEngineKeepsOnePreparedSlotUnderSavePressure | `engine.go`: validate an empty slice rather than the file bytes for UTF-8. | Invalid UTF-8 was handed to the indexer as eligible. |
+| IX7 | TestIndexingRevalidatesOwnerBeforePublishing | `index_work.go`: persist `scope_unavailable` instead of `owner_unavailable` on denied publication. | Both revoked grant and disabled-account tests observed the wrong durable failure cause. |
+| IX8 | TestIndexingScopeCapacityDoesNotReportComplete | `index_work.go`: increase the plan's node limit by one in the rejection check. | The first over-cap plan did not report capacity failure. |
+| IX9 | TestMCPAdmissionWaitFullAndRecovery (extended) | `index_pressure.go`: return one more waiter than the data queue actually owns. | The exported index pressure was six while exactly five calls waited. |

@@ -106,6 +106,9 @@ func TestMCPAdmissionWaitFullAndRecovery(t *testing.T) {
 		default:
 		}
 		more := fillRemainingQueue(ctx, h, "read_file")
+		if n := PendingDataRequests(h); n != 5 {
+			t.Fatalf("index pressure count = %d, want 5 waiters", n)
+		}
 		queueStatus(t, queueRequest(ctx, h, "tools/call", "read_file", false), 503, "mcp-full", "1")
 		close(release)
 		queueStatus(t, <-first, 200, "", "")
@@ -114,6 +117,9 @@ func TestMCPAdmissionWaitFullAndRecovery(t *testing.T) {
 			queueStatus(t, <-done, 200, "", "")
 		}
 		queueStatus(t, queueRequest(ctx, h, "tools/call", "read_file", false), 200, "", "")
+		if n := PendingDataRequests(h); n != 0 {
+			t.Fatalf("drained index pressure count = %d, want zero", n)
+		}
 		out := logs.String()
 		if !strings.Contains(out, "msg=mcp-admission class=file-read result=full") ||
 			!strings.Contains(out, "queued=true") || !strings.Contains(out, "waiting=5") ||

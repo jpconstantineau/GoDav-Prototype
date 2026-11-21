@@ -16,6 +16,16 @@ func (s *AccountStore) acquire(ctx context.Context) (result error) {
 	if ctx.Err() != nil {
 		return files.ErrBusy
 	}
+	if s.indexPriority.Load() {
+		s.foregroundMu.Lock()
+		s.foregroundWaiting++
+		s.foregroundMu.Unlock()
+		defer func() {
+			s.foregroundMu.Lock()
+			s.foregroundWaiting--
+			s.foregroundMu.Unlock()
+		}()
+	}
 	wait, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	select {
@@ -29,4 +39,13 @@ func (s *AccountStore) acquire(ctx context.Context) (result error) {
 		return files.ErrBusy
 	}
 }
-func (s *AccountStore) release() { <-s.operation }
+func (s *AccountStore) release() {
+	if !s.indexPriority.Load() {
+		<-s.operation
+		return
+	}
+	s.foregroundMu.Lock()
+	s.lastForegroundAt = time.Now()
+	<-s.operation
+	s.foregroundMu.Unlock()
+}
