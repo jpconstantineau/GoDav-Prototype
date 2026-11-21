@@ -26,30 +26,37 @@ func (s *Settings) loadMCPUsernames(single, multiple *yaml.Node) bool {
 	if (single == nil) == (multiple == nil) {
 		return false
 	}
-	valid := func(node *yaml.Node) bool {
-		return node.Kind == yaml.ScalarNode && node.Tag == "!!str" && auth.ValidUsername(node.Value)
-	}
 	if single != nil {
-		if !valid(single) {
+		if !validUsernameNode(single) {
 			return false
 		}
 		s.MCPUsername = single.Value
 		return true
 	}
-	if multiple.Kind != yaml.SequenceNode || len(multiple.Content) < 1 || len(multiple.Content) > len(s.mcpUsernames) {
-		return false
+	var ok bool
+	s.mcpUsernames, s.mcpUsernameCount, ok = loadUsernameList(multiple)
+	return ok
+}
+
+func validUsernameNode(node *yaml.Node) bool {
+	return node != nil && node.Kind == yaml.ScalarNode && node.Tag == "!!str" && auth.ValidUsername(node.Value)
+}
+
+func loadUsernameList(node *yaml.Node) (names [maxMCPUsernames]string, count int, ok bool) {
+	if node == nil || node.Kind != yaml.SequenceNode || len(node.Content) < 1 || len(node.Content) > len(names) {
+		return names, 0, false
 	}
-	for _, item := range multiple.Content {
-		if !valid(item) {
-			return false
+	for _, item := range node.Content {
+		if !validUsernameNode(item) {
+			return [maxMCPUsernames]string{}, 0, false
 		}
 		name := strings.ToLower(item.Value)
-		if slices.Contains(s.mcpUsernames[:s.mcpUsernameCount], name) {
-			return false
+		if slices.Contains(names[:count], name) {
+			return [maxMCPUsernames]string{}, 0, false
 		}
-		s.mcpUsernames[s.mcpUsernameCount] = name
-		s.mcpUsernameCount++
+		names[count] = name
+		count++
 	}
-	slices.Sort(s.mcpUsernames[:s.mcpUsernameCount])
-	return true
+	slices.Sort(names[:count])
+	return names, count, true
 }

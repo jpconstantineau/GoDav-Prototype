@@ -338,3 +338,34 @@ exit 1 at the stated assertion, not a compiler error. No mutants were committed.
 | IX7 | TestIndexingRevalidatesOwnerBeforePublishing | `index_work.go`: persist `scope_unavailable` instead of `owner_unavailable` on denied publication. | Both revoked grant and disabled-account tests observed the wrong durable failure cause. |
 | IX8 | TestIndexingScopeCapacityDoesNotReportComplete | `index_work.go`: increase the plan's node limit by one in the rejection check. | The first over-cap plan did not report capacity failure. |
 | IX9 | TestMCPAdmissionWaitFullAndRecovery (extended) | `index_pressure.go`: return one more waiter than the data queue actually owns. | The exported index pressure was six while exactly five calls waited. |
+
+## MCP indexing administration (upper #25)
+
+Host: Zen, Windows amd64, Go 1.27.4, CGO disabled. The upper behavior is
+stacked on the indexing engine at fd564e0. The focused clean package tests
+and the disposable authenticated HTTPS lifecycle test passed.
+
+Each unit mutation replaces exactly one production expression with a Go
+source overlay outside the repository, then runs the matching test alone
+with go test -p=2 -overlay <file> <package> -run ^<test>$ -count=1 -v.
+No mutant is included in the candidate.
+
+| Test | Temporary edit | Observed failure |
+| --- | --- | --- |
+| TestIndexingSettingsScopedExplicitAdminGrant | Ignore the configured indexing byte override by assigning zero instead of the parsed value. | The configured resource budget/grants no longer round-trip. |
+| TestAdminOperationsUseVerifiedPrincipalAndCurrentJob | Pass an empty generation instead of the supplied job ID to Pause. | The controller received the wrong pause command. |
+| TestAdminRejectsSelectorsAndUnsafeControlInputBeforeDispatch | Remove the mutation job-ID requirement before dispatch. | The pause request with no generation was accepted by the adapter. |
+| TestAdminSanitizesRuntimeStateAndFailure | Return the unknown backend failure string rather than the fixed fallback error code. | The fake raw database marker appeared in the projected response. |
+| TestIndexAdminDiscoversOnlyOrdinaryToolAndSharesQueue | Give the admin handler its own admission scheduler rather than the primary queue. | Stopping the primary queue left an admin call returning 200 instead of mcp-stopping. |
+| TestIndexWorkerStopsAndJoinsBeforeRelease | Return immediately instead of awaiting the worker completion channel. | The storage lifetime barrier finished before the worker was done. |
+
+All six unit mutations were killed (exit 1, intended assertion).
+
+The disposable HTTPS lifecycle test required a physical detached worktree:
+its child Go build ignores tool overlays. Temporarily replaced the admin
+handler's legacy task-augmentation rejection condition with false and ran
+go test -p=2 ./internal/cli -run ^TestMCPIndexAdminHTTPSOwnerLifecycle$ -count=1 -v.
+The clean HTTPS lifecycle passed (3.99s); the mutant exited 1 with
+“explicit legacy task request was not rejected before dispatch”. Restored
+the original handler byte-for-byte and confirmed a clean detached tree.
+Seven of seven mutations were killed.
