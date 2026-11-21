@@ -66,3 +66,11 @@ func MCPExecution(ctx context.Context, class string, elapsed time.Duration, fail
 		state.logger.Info("mcp-execution", "class", class, "result", result, "duration", elapsed, "request_id", state.id)
 	}
 }
+
+// AuthLookupFailure observes a failed or cancelled lookup without marking the
+// HTTP response as a known pre-operation rejection or authorizing a retry.
+func AuthLookupFailure(ctx context.Context) {
+	if state, ok := ctx.Value(key{}).(*observation); ok {
+		state.logger.Info("authentication-lookup", "result", "failed", "request_id", state.id)
+	}
+}

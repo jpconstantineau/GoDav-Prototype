@@ -36,10 +36,11 @@ database access or a higher outer request or connection limit.
 A queue rejection returns HTTP 503. `GoDav-Rejection` distinguishes `mcp-full`,
 `mcp-timeout`, `mcp-stopping`, or `mcp-cancelled`. Retryable queue rejections
 include integer `Retry-After: 1`. Existing request and authentication markers
-remain separate; `authentication-lookup` identifies an unsuccessful account
-lookup operation, not invalid credentials. Application logs correlate the
-response's rejection marker, coarse MCP class, queue wait/occupancy, dispatch
-duration, and existing SQLite gate waits by request ID. Count rejection lines
+remain separate. Unsuccessful account lookup or cancellation produces the
+`authentication-lookup` log event only, without authorizing a retry via HTTP.
+Application logs correlate the response's rejection marker, coarse MCP class,
+queue wait/occupancy, dispatch duration, and existing SQLite gate waits by
+request ID. Count rejection lines
 by stage; names, credentials, content and request bodies are not logged.
 
 For a retryable read, respect the retry hint and try again after a short delay.

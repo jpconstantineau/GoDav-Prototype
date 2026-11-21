@@ -80,7 +80,7 @@ func HandlerWithMCP(accounts AccountLookup, collections *files.Service, origin s
 			return found, matches, r.Context().Err()
 		}()
 		if err != nil {
-			w.Header().Set("GoDav-Rejection", "authentication-lookup")
+			requestlog.AuthLookupFailure(r.Context())
 			http.Error(w, "Service Unavailable", 503)
 			return
 		}
@@ -155,7 +155,7 @@ func Trace(logger *slog.Logger, next http.Handler) http.Handler {
 		defer func() {
 			fields := []any{"method", safeMethod(r.Method), "path", safePath(r), "status", record.code(), "outcome", record.outcome(r.Context()), "duration", time.Since(start), "request_id", id}
 			switch rejection := record.Header().Get("GoDav-Rejection"); rejection {
-			case "requests", "receiving", "stopping", "authentication", "authentication-lookup",
+			case "requests", "receiving", "stopping", "authentication",
 				"mcp-full", "mcp-timeout", "mcp-stopping", "mcp-cancelled":
 				fields = append(fields, "rejection", rejection)
 			}

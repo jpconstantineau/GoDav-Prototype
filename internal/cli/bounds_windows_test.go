@@ -385,6 +385,9 @@ func TestBoundsAuthenticationWaitDoesNotQueue(t *testing.T) {
 	if !strings.Contains(p.logs.String(), "msg=store-gate result=timeout") || !strings.Contains(p.logs.String(), "wait=") {
 		t.Fatal("bounded acquisition lacks safe wait diagnostics")
 	}
+	if diagnostics := strings.Count(p.logs.String(), "msg=authentication-lookup result=failed request_id="); diagnostics != waited {
+		t.Fatalf("got %d log-only authentication failures for %d bounded waits", diagnostics, waited)
+	}
 	if <-publication != 500 {
 		t.Fatal("publication fault outcome incorrect")
 	}

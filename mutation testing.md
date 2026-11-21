@@ -218,3 +218,24 @@ survivors and zero invalid/equivalent. The restored admission and server tests
 passed ten repetitions, including the deterministic shutdown wiring test, with:
 `go test ./internal/mcpskills ./internal/server -run '^(TestMCPAdmission|TestRequestUsersStopClosesMCPAdmission)' -count=10 -timeout=60s`.
 The four Windows integration tests passed (19.714s). No mutants were committed.
+
+### Legacy authentication lookup retry boundary
+
+The full Windows suite caught an attempted response-header change:
+`TestBoundsAuthenticationWaitDoesNotQueue` rejected marking two delayed SQLite
+authentication waits as retryable. The fix leaves these responses unmarked,
+retains the old immediate `authentication` admission marker, and logs the
+lookup failure with the correlated request ID.
+
+`go test ./internal/cli -run '^TestBoundsAuthenticationWaitDoesNotQueue$' -count=1 -timeout=120s`
+passed clean (9.427s). Two further isolated mutants at the auth error path of
+`internal/dav/handler.go` were caught:
+
+- Replace `requestlog.AuthLookupFailure(r.Context())` with a comment: exit 1,
+  missing both log-only authentication failure records.
+- Keep that log call but add
+  `w.Header().Set("GoDav-Rejection", "authentication-lookup")` afterward:
+  exit 1, operation timeout incorrectly authorizes retry.
+
+The restored detached run passed (8.534s). Total for the queue follow-up:
+nine killed, zero survivors or invalid/equivalent among the selected mutants.
