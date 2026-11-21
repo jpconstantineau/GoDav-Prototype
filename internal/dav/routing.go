@@ -98,7 +98,7 @@ func requestScheme(r *http.Request) string {
 	return "https"
 }
 
-func routeStatusTransport(r *http.Request, expected authority, scheme string) int {
+func routeStatusTransport(r *http.Request, expected authority, scheme string, allowMCP ...bool) int {
 	actual, ok := parseAuthorityScheme(r.Host, scheme)
 	if !ok || actual != expected || requestScheme(r) != scheme {
 		return 400
@@ -113,8 +113,12 @@ func routeStatusTransport(r *http.Request, expected authority, scheme string) in
 	if !ok || path != r.URL.Path {
 		return 400
 	}
-	if path != "/dav" && !strings.HasPrefix(path, "/dav/") {
+	isMCP := scheme == "https" && len(allowMCP) == 1 && allowMCP[0] && path == "/mcp"
+	if !isMCP && path != "/dav" && !strings.HasPrefix(path, "/dav/") {
 		return 404
+	}
+	if isMCP && (r.RequestURI != "/mcp" || r.URL.RawPath != "" || strings.EqualFold(r.Header.Get("Sec-Fetch-Site"), "cross-site") || len(r.Header.Values("Destination")) != 0) {
+		return 400
 	}
 	if origins := r.Header.Values("Origin"); len(origins) > 0 {
 		if len(origins) != 1 {
@@ -165,6 +169,9 @@ func safeMethod(method string) string {
 }
 func safePath(r *http.Request) string {
 	raw, _, _ := strings.Cut(r.RequestURI, "?")
+	if raw == "/mcp" {
+		return "/mcp"
+	}
 	if raw == "/dav" || raw == "/dav/" {
 		return "/dav/"
 	}

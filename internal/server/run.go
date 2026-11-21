@@ -21,6 +21,7 @@ import (
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localfs"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localstate"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/mcpskills"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/sqlite"
 )
 
@@ -112,13 +113,23 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 		return errors.New("file preparation failed")
 	}
 	users := &requestUsers{logger: logger}
-	requestCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
 	protocols := &http.Protocols{}
 	protocols.SetHTTP1(true)
-	handler := dav.Handler(state.Accounts(), files.New(state.Accounts()), settings.PublicOrigin, settings.MaxFileBytes)
-	if httpTest {
-		handler = dav.HTTPTestHandler(files.New(state.Accounts()), settings.PublicOrigin, settings.MaxFileBytes)
+	fileService := files.New(state.Accounts())
+	var handler http.Handler
+	switch {
+	case httpTest:
+		handler = dav.HTTPTestHandler(fileService, settings.PublicOrigin, settings.MaxFileBytes)
+	case settings.MCPEnabled:
+		mcp, err := mcpskills.New(fileService, settings.MCPSkillsRoot)
+		if err != nil {
+			return errors.New("MCP configuration invalid")
+		}
+		handler = dav.HandlerWithMCP(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes, settings.MCPUsername, mcp)
+	default:
+		handler = dav.Handler(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes)
 	}
+	requestCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
 	srv := &http.Server{
 		Handler:                      dav.Trace(logger, users.guard(handler)),
 		Protocols:                    protocols,
