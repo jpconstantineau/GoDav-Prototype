@@ -5,17 +5,24 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // AccountStore holds the exact connection on which existing state was validated.
 // It exposes no raw SQL, pool or transaction. Callers must drain users before
 // Close; feature-specific operations belong in separate files in this package.
 type AccountStore struct {
-	db        *sql.DB
-	conn      *sql.Conn
-	writable  bool
-	operation chan struct{}
-	locks     files.LockTable
+	db                *sql.DB
+	conn              *sql.Conn
+	writable          bool
+	operation         chan struct{}
+	indexPriority     atomic.Bool
+	foregroundMu      sync.Mutex
+	foregroundWaiting int
+	lastForegroundAt  time.Time
+	locks             files.LockTable
 }
 
 // OpenExistingReadOnly requires private path checks and exclusive ownership
