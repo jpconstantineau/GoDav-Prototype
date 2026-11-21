@@ -10,6 +10,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/auth"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
@@ -389,4 +391,49 @@ func TestSkillEntryMIMEAcrossReadSurfaces(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNamedCatalogSharesDispatchAdmission(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		base, _ := fixture(t)
+		coding, err := NewNamedCatalog(base, "coding", []string{"demo"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		research, err := NewNamedCatalog(base, "research", []string{"demo"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		active := research.(*handler).admission
+		if got, _ := active.acquire(t.Context()); got != admitted {
+			t.Fatal("could not reserve the active SQLite dispatch slot")
+		}
+		defer active.release()
+		var pending []chan *httptest.ResponseRecorder
+		for _, h := range []http.Handler{base, coding, research, base, coding} {
+			done := make(chan *httptest.ResponseRecorder, 1)
+			pending = append(pending, done)
+			go func() { done <- queueRequest(t.Context(), h, "resources/list", "", false) }()
+			synctest.Wait()
+			select {
+			case w := <-done:
+				t.Fatalf("catalog bypassed the shared queue: status %d", w.Code)
+			default:
+			}
+		}
+		for _, h := range []http.Handler{base, coding, research} {
+			queueStatus(t, queueRequest(t.Context(), h, "resources/list", "", false), 503, "mcp-full", "1")
+			queueStatus(t, queueRequest(t.Context(), h, "tools/list", "", false), 200, "", "")
+		}
+		// The server stops only the primary handler; every named waiter must
+		// still wake immediately through the single shared admission object.
+		stop := time.Now()
+		StopAdmission(base)
+		for _, done := range pending {
+			queueStatus(t, <-done, 503, "mcp-stopping", "1")
+		}
+		if time.Since(stop) != 0 {
+			t.Fatal("catalog waiters were not woken immediately on shutdown")
+		}
+	})
 }

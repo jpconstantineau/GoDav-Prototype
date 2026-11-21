@@ -34,10 +34,12 @@ type Tool struct {
 	Call        func(context.Context, json.RawMessage) (any, error) `json:"-"`
 }
 type handler struct {
-	files     *files.Service
-	scope     string
-	extra     []Tool
-	admission *dataAdmission
+	files          *files.Service
+	scope          string
+	extra          []Tool
+	admission      *dataAdmission
+	serverName     string
+	selectedSkills map[string]bool
 }
 
 // New requires an authenticated principal in each request's context. Its host
@@ -70,7 +72,26 @@ func NewWithToolsAndAdmission(service *files.Service, scope string, extra []Tool
 		}
 		seen[t.Name] = true
 	}
-	return &handler{service, scope, append([]Tool(nil), extra...), &dataAdmission{capacity: limits.MCPActive, depth: limits.MCPWaiting, wait: limits.MCPWait}}, nil
+	return &handler{files: service, scope: scope, extra: append([]Tool(nil), extra...), admission: &dataAdmission{capacity: limits.MCPActive, depth: limits.MCPWaiting, wait: limits.MCPWait}, serverName: "godav-skills-smoke"}, nil
+}
+
+// NewNamedCatalog constructs a skills-only handler. The host must authenticate
+// and authorize the caller for this endpoint. Package membership comes from
+// trusted startup configuration, never request inputs.
+func NewNamedCatalog(defaultHandler http.Handler, name string, skills []string) (http.Handler, error) {
+	base, ok := defaultHandler.(*handler)
+	if !ok || base == nil || base.selectedSkills != nil || (name != "coding" && name != "research") || len(skills) == 0 || len(skills) > MaxSkills {
+		return nil, errors.New("invalid named skill catalog")
+	}
+	h := &handler{files: base.files, scope: base.scope, admission: base.admission, serverName: "godav-skills-" + name}
+	h.selectedSkills = make(map[string]bool, len(skills))
+	for _, skill := range skills {
+		if len(skill) > 64 || !skillName.MatchString(skill) || h.selectedSkills[skill] {
+			return nil, errors.New("invalid named skill catalog")
+		}
+		h.selectedSkills[skill] = true
+	}
+	return h, nil
 }
 
 type request struct {
@@ -212,7 +233,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if p.ProtocolVersion == EarlierLegacyVersion {
 			chosen = EarlierLegacyVersion
 		}
-		result := map[string]any{"protocolVersion": chosen, "capabilities": map[string]any{"tools": map[string]any{}, "resources": map[string]any{}}, "serverInfo": map[string]any{"name": "godav-skills-smoke", "version": "0.1.0"}}
+		result := map[string]any{"protocolVersion": chosen, "capabilities": map[string]any{"tools": map[string]any{}, "resources": map[string]any{}}, "serverInfo": map[string]any{"name": h.serverName, "version": "0.1.0"}}
 		writeJSON(w, 200, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
 		return
 	}
@@ -304,7 +325,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if modern {
 		result["resultType"] = "complete"
-		result["_meta"] = map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{"name": "godav-skills-smoke", "version": "0.1.0"}}
+		result["_meta"] = map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{"name": h.serverName, "version": "0.1.0"}}
 		result["ttlMs"] = 0
 		result["cacheScope"] = "private"
 	}

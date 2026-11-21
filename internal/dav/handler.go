@@ -50,12 +50,36 @@ type RequestPolicy struct {
 // HandlerWithRequestPolicy applies one shared authentication semaphore and one
 // authenticated request quota to the DAV and optional MCP routes.
 func HandlerWithRequestPolicy(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64, mcp http.Handler, policy RequestPolicy) http.Handler {
+	var endpoints map[string]MCPEndpoint
+	if mcp != nil {
+		endpoints = map[string]MCPEndpoint{"/mcp": {Handler: mcp, Users: policy.MCPUsers}}
+	}
+	return HandlerWithMCPEndpoints(accounts, collections, origin, maxBytes, endpoints, policy)
+}
+
+// MCPEndpoint binds a single exact HTTPS path to its operator-controlled allowlist.
+type MCPEndpoint struct {
+	Handler http.Handler
+	Users   []string
+}
+
+// HandlerWithMCPEndpoints shares authentication and the verified account quota
+// across DAV and all MCP endpoints, without combining their access grants.
+func HandlerWithMCPEndpoints(accounts AccountLookup, collections *files.Service, origin string, maxBytes int64, endpoints map[string]MCPEndpoint, policy RequestPolicy) http.Handler {
 	u, _ := url.Parse(origin)
 	expected, _ := parseAuthority(u.Host)
 	slots := make(chan struct{}, policy.AuthSlots)
-	allowed := make(map[string]bool, len(policy.MCPUsers))
-	for _, user := range policy.MCPUsers {
-		allowed[strings.ToLower(user)] = true
+	type route struct {
+		handler http.Handler
+		users   map[string]bool
+	}
+	routes := make(map[string]route, len(endpoints))
+	for path, endpoint := range endpoints {
+		users := make(map[string]bool, len(endpoint.Users))
+		for _, user := range endpoint.Users {
+			users[strings.ToLower(user)] = true
+		}
+		routes[path] = route{endpoint.Handler, users}
 	}
 	mux := http.NewServeMux()
 	root := discovery(collections, maxBytes)
@@ -67,7 +91,8 @@ func HandlerWithRequestPolicy(accounts AccountLookup, collections *files.Service
 			w.Header().Set("WWW-Authenticate", `Basic realm="GoDav"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		}
-		if code := routeStatusTransport(r, expected, "https", mcp != nil); code != 0 {
+		endpoint := routes[r.URL.Path]
+		if code := routeStatusTransport(r, expected, "https", endpoint.handler != nil); code != 0 {
 			http.Error(w, http.StatusText(code), code)
 			return
 		}
@@ -116,8 +141,8 @@ func HandlerWithRequestPolicy(accounts AccountLookup, collections *files.Service
 			reject()
 			return
 		}
-		isMCP := mcp != nil && r.URL.Path == "/mcp"
-		if isMCP && !allowed[verifiedKey] {
+		isMCP := endpoint.handler != nil
+		if isMCP && !endpoint.users[verifiedKey] {
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
 		}
@@ -132,7 +157,7 @@ func HandlerWithRequestPolicy(accounts AccountLookup, collections *files.Service
 		}
 		r = r.WithContext(auth.WithPrincipal(r.Context(), principal))
 		if isMCP {
-			mcp.ServeHTTP(w, r)
+			endpoint.handler.ServeHTTP(w, r)
 			return
 		}
 		mux.ServeHTTP(w, r)
