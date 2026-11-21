@@ -133,6 +133,12 @@ func TestMCPAdmissionControlsBypassQueuedData(t *testing.T) {
 				t.Errorf("control %s while data queue full: got %d, want 200", method, w.Code)
 			}
 		}
+		for _, tool := range []string{"unregistered-tool", "delete_file"} {
+			w := queueRequest(t.Context(), h, "tools/call", tool, false)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), `"code":-32602`) {
+				t.Errorf("unavailable tool %s lost existing RPC rejection while data queue full: got HTTP %d", tool, w.Code)
+			}
+		}
 		select {
 		case <-first:
 			t.Fatal("running fixture unexpectedly released")

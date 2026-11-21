@@ -252,7 +252,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	class := dataOperation(req.Method, p.Name, modern)
+	class := h.dataOperation(req.Method, p.Name, modern)
 	if class != "" {
 		start := time.Now()
 		outcome, queued := h.admission.acquire(ctx)
@@ -319,7 +319,7 @@ func rejectAdmission(w http.ResponseWriter, outcome admissionResult) {
 
 // Only already validated calls that might consult the data layer enter the
 // queue. Classes are fixed vocabulary, not client method names or parameters.
-func dataOperation(method, tool string, modern bool) string {
+func (h *handler) dataOperation(method, tool string, modern bool) string {
 	switch method {
 	case "skills/list", "skills/get":
 		if modern {
@@ -328,15 +328,23 @@ func dataOperation(method, tool string, modern bool) string {
 	case "resources/list", "resources/read":
 		return "skills"
 	case "tools/call":
-		switch tool {
-		case "create_file", "edit_file", "delete_file":
-			return "file-write"
-		case "list_files", "read_file", "search_files", "search_file_contents":
-			return "file-read"
-		case "list_skills", "get_skill":
+		if tool == "list_skills" || tool == "get_skill" {
 			return "skills"
-		default:
-			return "other-tool"
+		}
+		// Skip unregistered (including disabled) tools. They already return
+		// the existing parameter error without consulting the data layer.
+		for _, registered := range h.extra {
+			if registered.Name != tool {
+				continue
+			}
+			switch tool {
+			case "create_file", "edit_file", "delete_file":
+				return "file-write"
+			case "list_files", "read_file", "search_files", "search_file_contents":
+				return "file-read"
+			default:
+				return "other-tool"
+			}
 		}
 	}
 	return ""

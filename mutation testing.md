@@ -186,8 +186,9 @@ Host: Zen-1000, Windows amd64, Go 1.27.4, `CGO_ENABLED=0`. Base: main at
 `f2e732713eab3fe2c5af2647158f2a5076be506b`. Tests use Go's synchronized
 `testing/synctest` bubble with a virtual clock and barriers, not timing sleeps
 to create pressure. One active read is held inside a synthetic dispatch; queued
-writes have an observable callback that must never run after timeout,
-cancellation or shutdown. Previous real HTTPS Skills, WebDAV, file tools and
+writes have an observable callback that must never run after timeout or
+shutdown; a separate cancellation assertion checks the promotion decision.
+Previous real HTTPS Skills, WebDAV, file tools and
 FTS integrations use fresh disposable data and are rerun separately.
 
 Clean commands:
@@ -209,8 +210,11 @@ then restored byte-for-byte in a finally block:
 | `TestMCPAdmissionTimeoutNeverDispatchesWrite` | `admission.go`: `case !time.Now().Before(deadline):` to `case false:` after wake | The expired write returned 200 instead of 503 with timeout and integer retry hint. |
 | `TestMCPAdmissionCancellationWinsRelease` | `admission.go`: change `case contextEnded(ctx):` to `case false:` in the queued promotion switch only | Simultaneous release and cancellation granted the pending request. |
 | `TestMCPAdmissionShutdownWakesQueuedWrite` | `admission.go`: remove `q.notify()` immediately after `q.stopping = true` | Shutdown did not wake the pending request immediately. |
+| `TestMCPAdmissionControlsBypassQueuedData` | `handler.go`: return `"other-tool"` when a `tools/call` name is not registered, instead of falling through to `""` | The unavailable tool returned 503 in place of its ordinary JSON-RPC rejection. |
+| `TestRequestUsersStopClosesMCPAdmission` | `server/requests.go`: change `mcpskills.StopAdmission(g.mcp)` to `mcpskills.StopAdmission(nil)` | Outer shutdown still closed, but the MCP gate returned 200 and dispatched an additional call. |
 
-All five mutants failed their intended assertion (exit 1). Zero survivors and
-zero invalid/equivalent. The restored five-test run passed ten repetitions
-(0.057s), and the four Windows integration tests passed (19.714s). No mutants
-were committed.
+Seven temporary mutations failed their intended assertions (exit 1). Zero
+survivors and zero invalid/equivalent. The restored admission and server tests
+passed ten repetitions, including the deterministic shutdown wiring test, with:
+`go test ./internal/mcpskills ./internal/server -run '^(TestMCPAdmission|TestRequestUsersStopClosesMCPAdmission)' -count=10 -timeout=60s`.
+The four Windows integration tests passed (19.714s). No mutants were committed.

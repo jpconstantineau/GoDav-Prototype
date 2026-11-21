@@ -28,7 +28,8 @@ existing request deadline. A third data call does not wait. Shutdown wakes a
 pending call without dispatching it; the running call retains the existing
 shutdown grace. Canceled, expired, and rejected requests are never replayed.
 Discovery, tool-descriptor listing and ping bypass the data queue after the
-ordinary authentication and protocol checks. Authentication can still wait on
+ordinary authentication and protocol checks. Unavailable tools return their
+normal RPC error without taking a data slot. Authentication can still wait on
 the same SQLite operation gate as WebDAV and MCP data; this is not parallel
 database access or a higher outer request or connection limit.
 

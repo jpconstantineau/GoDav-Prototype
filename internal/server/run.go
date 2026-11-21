@@ -21,7 +21,6 @@ import (
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localfs"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localstate"
-	"github.com/jpconstantineau/GoDav-Prototype/internal/mcpskills"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/sqlite"
 )
@@ -126,7 +125,7 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 		if err != nil {
 			return errors.New("MCP configuration invalid")
 		}
-		users.stopMCP = func() { mcpskills.StopAdmission(mcp) }
+		users.mcp = mcp
 		handler = dav.HandlerWithMCP(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes, settings.MCPUsername, mcp)
 	default:
 		handler = dav.Handler(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes)

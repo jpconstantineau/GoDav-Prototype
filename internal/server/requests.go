@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
-	"github.com/jpconstantineau/GoDav-Prototype/internal/requestlog"
 	"io"
 	"log/slog"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/jpconstantineau/GoDav-Prototype/internal/mcpskills"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/requestlog"
 )
 
 const maxRequests = 4
@@ -22,7 +24,7 @@ type requestUsers struct {
 	active, receiving int
 	owners            sync.WaitGroup
 	logger            *slog.Logger
-	stopMCP           func()
+	mcp               http.Handler
 }
 
 func (g *requestUsers) guard(next http.Handler) http.Handler {
@@ -85,9 +87,7 @@ func (g *requestUsers) stop() {
 	defer g.mu.Unlock()
 	if !g.stopping {
 		g.stopping = true
-		if g.stopMCP != nil {
-			g.stopMCP()
-		}
+		mcpskills.StopAdmission(g.mcp)
 	}
 }
 func (g *requestUsers) wait() { g.owners.Wait() }
