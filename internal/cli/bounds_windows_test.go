@@ -224,6 +224,10 @@ func TestBoundsProcessDeadlinePreservesReplacement(t *testing.T) {
 func TestBoundsAcceptedConnectionsAndReuse(t *testing.T) {
 	bin := development(t)
 	f := newServerFixture(t, bin)
+	data := append(fixtureBytes(t, f.config), []byte("\nconcurrency:\n  max_connections: 6\n")...)
+	if err := os.WriteFile(f.config, data, 0600); err != nil {
+		t.Fatal(err)
+	}
 	p := startServer(t, bin, f)
 	defer p.stop()
 	endpoint, err := url.Parse(f.origin)
@@ -237,7 +241,7 @@ func TestBoundsAcceptedConnectionsAndReuse(t *testing.T) {
 			conn.Close()
 		}
 	}()
-	for range 16 {
+	for range 6 {
 		conn, err := net.DialTimeout("tcp", address, time.Second)
 		if err != nil {
 			t.Fatal("fixture transport connection failed")
@@ -280,7 +284,7 @@ func TestBoundsAcceptedConnectionsAndReuse(t *testing.T) {
 	}
 }
 
-func TestBoundsFourRequestsAndAuthenticationPermitRelease(t *testing.T) {
+func TestBoundsUploadsAndMetadataReleaseAuthenticationPermit(t *testing.T) {
 	f, client, _ := liveFiles(t, 32<<20)
 	first, _ := receivingRequest(t, client, f, "PUT", "/dav/one")
 	second, _ := receivingRequest(t, client, f, "PUT", "/dav/two")
@@ -290,8 +294,8 @@ func TestBoundsFourRequestsAndAuthenticationPermitRelease(t *testing.T) {
 	defer second.CloseWithError(io.ErrClosedPipe)
 	start := time.Now()
 	status, _, _ := fileRequest(t, client, f, "OPTIONS", "/dav/", nil, nil)
-	if status != 503 || time.Since(start) > time.Second {
-		t.Fatal("application admission is not bounded")
+	if status != 200 || time.Since(start) > time.Second {
+		t.Fatal("a fifth request could not use available admission and authentication capacity")
 	}
 	third.CloseWithError(io.ErrClosedPipe)
 	fourth.CloseWithError(io.ErrClosedPipe)
@@ -315,6 +319,35 @@ func TestBoundsFourRequestsAndAuthenticationPermitRelease(t *testing.T) {
 	}
 }
 
+func TestBoundsAuthenticatedAccountEleventhRequest(t *testing.T) {
+	f, client, _ := liveFiles(t, 32<<20)
+	client.Timeout = 8 * time.Second
+	pending := make([]*io.PipeWriter, 0, 10)
+	var firstDone <-chan int
+	for i := range 10 {
+		writer, done := receivingRequest(t, client, f, "PROPFIND", "/dav/")
+		pending = append(pending, writer)
+		if i == 0 {
+			firstDone = done
+		}
+	}
+	status, headers, _ := fileRequest(t, client, f, "OPTIONS", "/dav/", nil, nil)
+	if status != 429 || headers.Get("GoDav-Rejection") != "account-requests" {
+		t.Fatalf("eleventh HTTPS request got %d/%s, want account 429", status, headers.Get("GoDav-Rejection"))
+	}
+	if err := pending[0].Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-firstDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("owned authenticated request did not finish")
+	}
+	status, _, _ = fileRequest(t, client, f, "OPTIONS", "/dav/", nil, nil)
+	if status != 200 {
+		t.Fatalf("authenticated account quota did not recover over HTTPS: %d", status)
+	}
+}
 func TestBoundsAuthenticationWaitDoesNotQueue(t *testing.T) {
 	bin := development(t)
 	paused := faultBuild(t, "godav_test_pause_file_commit")
@@ -343,9 +376,9 @@ func TestBoundsAuthenticationWaitDoesNotQueue(t *testing.T) {
 		duration  time.Duration
 		rejection string
 	}
-	results := make(chan result, 3)
+	results := make(chan result, 11)
 	start := make(chan struct{})
-	for range 3 {
+	for range 11 {
 		go func() {
 			<-start
 			began := time.Now()
@@ -362,7 +395,7 @@ func TestBoundsAuthenticationWaitDoesNotQueue(t *testing.T) {
 	}
 	close(start)
 	immediate, waited := 0, 0
-	for range 3 {
+	for range 11 {
 		r := <-results
 		if r.status != 503 {
 			t.Fatalf("auth contention status %d", r.status)
@@ -379,11 +412,14 @@ func TestBoundsAuthenticationWaitDoesNotQueue(t *testing.T) {
 			waited++
 		}
 	}
-	if immediate != 1 || waited != 2 {
+	if immediate != 1 || waited != 10 {
 		t.Fatalf("auth admission got %d immediate and %d bounded waits", immediate, waited)
 	}
 	if !strings.Contains(p.logs.String(), "msg=store-gate result=timeout") || !strings.Contains(p.logs.String(), "wait=") {
 		t.Fatal("bounded acquisition lacks safe wait diagnostics")
+	}
+	if diagnostics := strings.Count(p.logs.String(), "msg=authentication-lookup result=failed request_id="); diagnostics != waited {
+		t.Fatalf("got %d log-only authentication failures for %d bounded waits", diagnostics, waited)
 	}
 	if <-publication != 500 {
 		t.Fatal("publication fault outcome incorrect")
