@@ -68,6 +68,11 @@ type skillsWireEntry struct {
 
 func mcpWire(t *testing.T, client *http.Client, f serverFixture, method string, params map[string]any, version, user, password string) (int, skillsWireReply) {
 	t.Helper()
+	return mcpWireAt(t, client, f, "/mcp", method, params, version, user, password)
+}
+
+func mcpWireAt(t *testing.T, client *http.Client, f serverFixture, route, method string, params map[string]any, version, user, password string) (int, skillsWireReply) {
+	t.Helper()
 	if version == "2026-07-28" {
 		params["_meta"] = map[string]any{"io.modelcontextprotocol/protocolVersion": version, "io.modelcontextprotocol/clientInfo": map[string]any{"name": "skills-fixture", "version": "1"}, "io.modelcontextprotocol/clientCapabilities": map[string]any{}}
 	}
@@ -75,7 +80,7 @@ func mcpWire(t *testing.T, client *http.Client, f serverFixture, method string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, err := http.NewRequest("POST", f.origin+"/mcp", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", f.origin+route, bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}

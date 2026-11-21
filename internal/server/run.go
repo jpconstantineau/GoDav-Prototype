@@ -21,6 +21,8 @@ import (
 	"github.com/jpconstantineau/GoDav-Prototype/internal/files"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localfs"
 	"github.com/jpconstantineau/GoDav-Prototype/internal/localstate"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/mcpindexadmin"
+	"github.com/jpconstantineau/GoDav-Prototype/internal/mcpskills"
 
 	"github.com/jpconstantineau/GoDav-Prototype/internal/sqlite"
 )
@@ -123,6 +125,16 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 	}
 	users := &requestUsers{logger: logger, limits: limits}
 	davPolicy := dav.RequestPolicy{AuthSlots: limits.AuthSlots, Admit: users.admitAccount, MCPUsers: settings.MCPAllowedUsernames()}
+	var indexWorker *indexingRuntime
+	if !httpTest {
+		var err error
+		indexWorker, err = prepareIndexing(ctx, state.Accounts(), settings.Indexing, func() int {
+			return mcpskills.PendingDataRequests(users.mcp)
+		}, logger)
+		if err != nil {
+			return err
+		}
+	}
 	protocols := &http.Protocols{}
 	protocols.SetHTTP1(true)
 	fileService := files.New(state.Accounts())
@@ -136,7 +148,26 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 			return errors.New("MCP configuration invalid")
 		}
 		users.mcp = mcp
-		handler = dav.HandlerWithRequestPolicy(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes, mcp, davPolicy)
+		if admins := settings.Indexing.AdminUsers(); len(admins) != 0 {
+			if indexWorker == nil {
+				return errors.New("indexing admin requires an indexing engine")
+			}
+			tool, err := mcpindexadmin.New(indexWorker.controller, indexWorker.available.Load)
+			if err != nil {
+				return errors.New("indexing admin tool configuration invalid")
+			}
+			admin, err := mcpskills.NewIndexAdmin(mcp, tool)
+			if err != nil {
+				return errors.New("indexing admin handler configuration invalid")
+			}
+			endpoints := map[string]dav.MCPEndpoint{
+				"/mcp":                {Handler: mcp, Users: davPolicy.MCPUsers},
+				"/mcp/admin/indexing": {Handler: admin, Users: admins},
+			}
+			handler = dav.HandlerWithMCPEndpoints(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes, endpoints, davPolicy)
+		} else {
+			handler = dav.HandlerWithRequestPolicy(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes, mcp, davPolicy)
+		}
 	default:
 		handler = dav.HandlerWithRequestPolicy(state.Accounts(), fileService, settings.PublicOrigin, settings.MaxFileBytes, nil, davPolicy)
 	}
@@ -161,6 +192,11 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 	if httpTest {
 		srv.SetKeepAlivesEnabled(false)
 	}
+	indexWorker.start(ctx, logger)
+	defer func() {
+		indexWorker.stop()
+		indexWorker.join()
+	}()
 	done := make(chan error, 1)
 	go func() {
 		var transport net.Listener = &boundedListener{Listener: listener, permits: make(chan struct{}, limits.MaxConnections), logger: logger}
@@ -182,6 +218,7 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 			result = ErrServing
 		}
 		users.stop()
+		indexWorker.stop()
 		observer.report(Stopping, nil)
 		cancelRequests()
 		result = errors.Join(result, finishRequests(srv, users, logger))
@@ -190,6 +227,7 @@ func serveState(ctx context.Context, state serverState, identity Identity, outpu
 	}
 	stopStarted = time.Now()
 	users.stop()
+	indexWorker.stop()
 	observer.report(Stopping, nil)
 	logger.Info("shutdown", "phase", "stop-admission")
 	logger.Info("shutdown", "phase", "draining", "grace", settings.ShutdownGrace)
