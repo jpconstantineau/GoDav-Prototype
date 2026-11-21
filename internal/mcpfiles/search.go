@@ -23,7 +23,7 @@ func searchDescriptor() Descriptor {
 			"path":  map[string]any{"type": "string", "description": "Decoded directory path relative to the configured files root; empty string searches that root. Returned paths are relative to the files root, not to this search directory. No absolute paths or traversal."},
 			"query": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxSearchQueryBytes, "description": "Nonempty literal path substring, at most 4096 UTF-8 bytes; slash matches path separators. Whitespace is literal."},
 			"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": MaxSearchResults, "default": MaxSearchResults, "description": "Maximum returned file matches (not scan size), default 100. Reaching this limit can return partial=true even if no additional matches exist."},
-		}}}
+		}}, nil}
 }
 
 type SearchEntry struct {

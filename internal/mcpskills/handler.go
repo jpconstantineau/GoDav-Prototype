@@ -28,10 +28,12 @@ const MaxRequestBytes = 64 << 10
 // Tool extends the dispatcher without coupling the skill catalog to another
 // domain. Call receives the authenticated request context. Errors are redacted.
 type Tool struct {
-	Name        string                                              `json:"name"`
-	Description string                                              `json:"description"`
-	InputSchema map[string]any                                      `json:"inputSchema"`
-	Call        func(context.Context, json.RawMessage) (any, error) `json:"-"`
+	Name         string                                              `json:"name"`
+	Description  string                                              `json:"description"`
+	InputSchema  map[string]any                                      `json:"inputSchema"`
+	OutputSchema map[string]any                                      `json:"outputSchema,omitempty"`
+	Failure      func(error) (code, message string)                  `json:"-"`
+	Call         func(context.Context, json.RawMessage) (any, error) `json:"-"`
 }
 type handler struct {
 	files     *files.Service
@@ -262,6 +264,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unsupported notification", 400)
 		return
 	}
+	if req.Method == "tools/call" && len(p.Arguments) > 0 && p.Arguments[0] != '{' {
+		fail(w, 200, -32602, req.ID, "Tool arguments must be an object", nil)
+		return
+	}
 	ctx := r.Context()
 	class := h.dataOperation(req.Method, p.Name, modern)
 	if class != "" {
@@ -304,7 +310,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if modern {
 		result["resultType"] = "complete"
-		result["_meta"] = map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{"name": "godav-skills-smoke", "version": "0.1.0"}}
+		meta, _ := result["_meta"].(map[string]any)
+		if meta == nil {
+			meta = make(map[string]any)
+		}
+		meta["io.modelcontextprotocol/serverInfo"] = map[string]any{"name": "godav-skills-smoke", "version": "0.1.0"}
+		result["_meta"] = meta
 		result["ttlMs"] = 0
 		result["cacheScope"] = "private"
 	}
@@ -386,6 +397,9 @@ func (h *handler) dispatch(ctx context.Context, method string, p params, modern 
 		for _, t := range h.extra {
 			if t.Name == p.Name {
 				v, e := t.Call(ctx, p.Arguments)
+				if e != nil && t.Failure != nil {
+					return failedToolResult(t.Failure(e)), nil
+				}
 				return toolResult(v, e), nil
 			}
 		}
@@ -399,9 +413,6 @@ func (h *handler) dispatch(ctx context.Context, method string, p params, modern 
 		return nil, errParams
 	}
 	if method == "tools/call" {
-		if len(p.Arguments) > 0 && p.Arguments[0] != '{' {
-			return toolResult(nil, errParams), nil
-		}
 		if p.Name == "list_skills" && len(p.Arguments) > 0 {
 			var args map[string]json.RawMessage
 			if json.Unmarshal(p.Arguments, &args) != nil || len(args) > 0 {

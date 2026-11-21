@@ -314,3 +314,32 @@ passed (6.122s). The isolated C16 mutant replaced
 missing global admission refusal, then restored (2.249s clean). Test and
 ledger only; the production code and measured fixture configuration did not
 change.
+
+## Issue #22: Typed MCP file result contracts
+
+Windows, `CGO_ENABLED=0`. Real authenticated HTTPS and SQLite fixtures through
+the public MCP and WebDAV routes. Clean and restored:
+`go test ./internal/cli -run '^TestMCPFile(OutputSchemas|ToolFailureContract)$' -count=1 -timeout=3m -v`
+passed both tests on 2026-07-28, 2025-11-25 and 2025-06-18 (6.700 s on
+the restored run). The first test checks advertised schemas against real
+successes and their matching text blocks; the other checks distinct
+failure surfaces and verifies rejected edits and deletes leave WebDAV bytes
+and validators unchanged.
+
+Each mutation was applied to one source file at a time in a separate detached
+worktree and restored byte-for-byte. The command was
+`go test ./internal/cli -run '^<test>$/^2026-07-28$' -count=1 -timeout=2m -v`.
+TR1 and TR3 were also rerun on each full test (no version restriction) and
+killed by the same assertions under both 2025 protocol variants.
+
+| ID | Test | Temporary production change | Failure that killed it |
+| --- | --- | --- | --- |
+| TR1 | `TestMCPFileOutputSchemas` | `internal/server/mcp_file_tools.go`: forward `OutputSchema: nil` rather than `d.OutputSchema`. | The first tool call found no published closed object schema. |
+| TR2 | `TestMCPFileOutputSchemas` | `internal/mcpfiles/output_schema.go`: declare `next_offset` a string instead of an integer. | Real list result failed advertised schema at `next_offset`. |
+| TR3 | `TestMCPFileToolFailureContract` | `internal/mcpfiles/failure.go`: map revision precondition to code `already_exists` instead of `precondition_failed`. | Stale edit returned the wrong machine-readable recovery code. |
+| TR4 | `TestMCPFileToolFailureContract` | `internal/mcpskills/handler.go`: use a fresh map instead of merging the result's existing `_meta`. | Create conflict lost its `already_exists` code on modern MCP. |
+| TR5 | `TestMCPFileToolFailureContract` | `internal/mcpskills/handler.go`: change method match in the structural arguments check to a non-existent method. | A non-object argument produced a tool result instead of RPC invalid params. |
+| TR6 | `TestMCPFileToolFailureContract` | `internal/mcpfiles/failure.go`: map an existing lock to code `unavailable` instead of `locked`. | The locked edit returned the wrong code despite unchanged enforcement. |
+
+All six mutations exited 1 at the expected assertions, with no survivors
+or committed mutant code.

@@ -35,7 +35,7 @@ func contentSearchDescriptor() Descriptor {
 			"max_size":        size("Inclusive maximum size in bytes."),
 			"limit":           map[string]any{"type": "integer", "minimum": 1, "maximum": files.MaxContentSearchResults, "default": defaultContentSearchLimit, "description": "Maximum returned matches. partial=true means more matches exist; narrow the filters."},
 		},
-	}}
+	}, nil}
 }
 
 func (h *Handler) searchContent(ctx context.Context, principal string, raw json.RawMessage) (any, error) {

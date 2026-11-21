@@ -19,9 +19,10 @@ const MaxListEntries = 100
 const MaxArgumentBytes = 6*MaxContentBytes + 8192
 
 type Descriptor struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	InputSchema  map[string]any `json:"inputSchema"`
+	OutputSchema map[string]any `json:"outputSchema"`
 }
 type Handler struct {
 	service  *files.Service
@@ -49,15 +50,19 @@ func Tools() []Descriptor {
 	path := str("Decoded path relative to the configured logical root; no traversal, absolute paths, or URL decoding.")
 	etag := str("Exact strong ETag returned by read_file/list_files; required for atomic conflict checking.")
 	content := map[string]any{"type": "string", "maxLength": MaxContentBytes, "description": "Complete UTF-8 text, at most 65536 encoded bytes."}
-	return []Descriptor{
+	descriptors := []Descriptor{
 		searchDescriptor(),
 		contentSearchDescriptor(),
-		{"list_files", "List files and folders directly inside one folder in the configured file library. Use an empty path to list the library root. This does not list other libraries or skills. Pages can shift if files change between calls.", schema(map[string]any{"path": path, "offset": map[string]any{"type": "integer", "minimum": 0, "maximum": files.MaxChildren}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": MaxListEntries}}, "path")},
-		{"read_file", "Read a UTF-8 text file up to 65536 bytes. The returned ETag identifies the version read; pass it to edit_file or delete_file to avoid changing a newer version. Larger or binary files are refused.", schema(map[string]any{"path": path}, "path")},
-		{"create_file", "Create one UTF-8 text file without overwriting. The parent folder must exist. A WebDAV lock can block this change; do not try to bypass it.", schema(map[string]any{"path": path, "content": content}, "path", "content")},
-		{"edit_file", "Replace the entire UTF-8 text of a file only if expected_etag still matches. A WebDAV lock can block this change; do not try to bypass it.", schema(map[string]any{"path": path, "content": content, "expected_etag": etag}, "path", "content", "expected_etag")},
-		{"delete_file", "Delete one file only if expected_etag still matches. Never deletes a folder. A WebDAV lock can block this change; do not try to bypass it.", schema(map[string]any{"path": path, "expected_etag": etag}, "path", "expected_etag")},
+		{"list_files", "List files and folders directly inside one folder in the configured file library. Use an empty path to list the library root. This does not list other libraries or skills. Pages can shift if files change between calls.", schema(map[string]any{"path": path, "offset": map[string]any{"type": "integer", "minimum": 0, "maximum": files.MaxChildren}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": MaxListEntries}}, "path"), nil},
+		{"read_file", "Read a UTF-8 text file up to 65536 bytes. The returned ETag identifies the version read; pass it to edit_file or delete_file to avoid changing a newer version. Larger or binary files are refused.", schema(map[string]any{"path": path}, "path"), nil},
+		{"create_file", "Create one UTF-8 text file without overwriting. The parent folder must exist. A WebDAV lock can block this change; do not try to bypass it.", schema(map[string]any{"path": path, "content": content}, "path", "content"), nil},
+		{"edit_file", "Replace the entire UTF-8 text of a file only if expected_etag still matches. A WebDAV lock can block this change; do not try to bypass it.", schema(map[string]any{"path": path, "content": content, "expected_etag": etag}, "path", "content", "expected_etag"), nil},
+		{"delete_file", "Delete one file only if expected_etag still matches. Never deletes a folder. A WebDAV lock can block this change; do not try to bypass it.", schema(map[string]any{"path": path, "expected_etag": etag}, "path", "expected_etag"), nil},
 	}
+	for i := range descriptors {
+		descriptors[i].OutputSchema = outputSchema(descriptors[i].Name)
+	}
+	return descriptors
 }
 func (h *Handler) Tools() []Descriptor {
 	tools := Tools()
@@ -206,7 +211,7 @@ func (h *Handler) Call(ctx context.Context, principal, name string, raw json.Raw
 			return nil, files.ErrTooLarge
 		}
 		if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
-			return nil, files.ErrInvalid
+			return nil, errNotText
 		}
 		return map[string]any{"file": entry(snap.Node), "content": string(data)}, nil
 	case "create_file", "edit_file":
@@ -248,7 +253,7 @@ func (h *Handler) Call(ctx context.Context, principal, name string, raw json.Raw
 				return nil, files.ErrTooLarge
 			}
 			if !text {
-				return nil, files.ErrInvalid
+				return nil, errNotText
 			}
 			contentType = snap.Node.ContentType
 		}

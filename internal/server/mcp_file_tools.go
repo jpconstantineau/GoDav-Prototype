@@ -27,7 +27,8 @@ func buildMCP(settings config.Settings, service *files.Service) (http.Handler, e
 			continue
 		}
 		selected = append(selected, mcpskills.Tool{
-			Name: d.Name, Description: d.Description, InputSchema: d.InputSchema,
+			Name: d.Name, Description: d.Description, InputSchema: d.InputSchema, OutputSchema: d.OutputSchema,
+			Failure: func(err error) (string, string) { return mcpfiles.Failure(d.Name, err) },
 			Call: func(ctx context.Context, args json.RawMessage) (any, error) {
 				if mcpfiles.IsWrite(d.Name) && !settings.MCPFileWrites {
 					return nil, files.ErrInvalid
